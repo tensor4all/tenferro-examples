@@ -1,0 +1,20 @@
+[package]
+name = "nqs_rbm"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Neural-network quantum states (Carleo and Troyer 2017) trained by variational Monte Carlo with tenferro"
+
+[dependencies]
+tenferro-ad.workspace = true
+tenferro-cpu.workspace = true
+tenferro-linalg.workspace = true
+tenferro-runtime.workspace = true
+rand = "0.8"
+rayon = "1"
+plotters = { version = "0.3", default-features = false, features = [
+    "bitmap_backend",
+    "bitmap_encoder",
+    "line_series",
+] }

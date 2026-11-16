@@ -53,6 +53,16 @@ jobs:
           mkdir -p outputs
           cargo run $LOCKED --release -p kdv_pinn -- --epochs 20 \
             --loss-png outputs/kdv-pinn-loss.png --gif outputs/kdv-pinn.gif
+          cargo run $LOCKED --release -p nqs_rbm -- --system ising-chain --size 8 \
+            --steps 100 --samples 256 --validation-sweeps 256 --exact \
+            --output-dir outputs/nqs-ising-chain \
+            --energy-png outputs/nqs-ising-chain-energy.png \
+            --filters-png outputs/nqs-ising-chain-filters.png
+          cargo run $LOCKED --release -p nqs_rbm -- --system heisenberg-chain --size 8 \
+            --steps 100 --samples 256 --validation-sweeps 256 --exact
+          cargo run $LOCKED --release -p nqs_rbm -- --system heisenberg-square --size 4 \
+            --alpha 2 --steps 20 --samples 128 --validation-sweeps 128 \
+            --filters-png outputs/nqs-heisenberg-square-filters.png
 
       - uses: actions/upload-artifact@v7
         with:
