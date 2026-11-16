@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["examples/*"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+# tenferro crates used by the examples. CI builds against these released
+# versions; `.github/workflows/upstream-main.yml` replaces them with the
+# tenferro-rs `main` branch to catch breakage before the next release.
+[workspace.dependencies]
+tenferro-ad = "0.11.0"
+tenferro-cpu = "0.11.0"
+tenferro-runtime = "0.11.0"
+tenferro-tensor = "0.11.0"

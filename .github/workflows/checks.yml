@@ -1,0 +1,61 @@
+name: checks
+
+# Reusable job run by ci.yml (released tenferro) and upstream-main.yml
+# (tenferro-rs main branch).
+on:
+  workflow_call:
+    inputs:
+      tenferro:
+        description: "`release` uses the versions pinned in Cargo.toml; `main` uses the tenferro-rs main branch."
+        type: string
+        default: release
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    name: fmt, clippy, test, short runs (${{ inputs.tenferro }})
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Point tenferro crates at tenferro-rs main
+        if: inputs.tenferro == 'main'
+        run: |
+          sed -i -E 's#^(tenferro-[a-z-]+) = "[^"]+"#\1 = { git = "https://github.com/tensor4all/tenferro-rs", branch = "main" }#' Cargo.toml
+          grep '^tenferro-' Cargo.toml
+          echo "LOCKED=" >> "$GITHUB_ENV"
+
+      - name: Use the committed lockfile
+        if: inputs.tenferro != 'main'
+        run: echo "LOCKED=--locked" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: tenferro-${{ inputs.tenferro }}
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy $LOCKED --workspace --all-targets --release -- -D warnings
+
+      - name: cargo test
+        run: cargo test $LOCKED --workspace --release
+
+      - name: Short runs
+        run: |
+          mkdir -p outputs
+          cargo run $LOCKED --release -p kdv_pinn -- --epochs 20 \
+            --loss-png outputs/kdv-pinn-loss.png --gif outputs/kdv-pinn.gif
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: example-outputs-${{ inputs.tenferro }}
+          path: outputs/
+          if-no-files-found: error
