@@ -636,6 +636,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nqs_rbm"
+version = "0.1.0"
+dependencies = [
+ "plotters",
+ "rand",
+ "rayon",
+ "tenferro-ad",
+ "tenferro-cpu",
+ "tenferro-linalg",
+ "tenferro-runtime",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1417,6 +1430,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "tenferro-linalg"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7600ca27dcd24618da55421aeea66d47d0d5370b69581bc1b92c5f76c1959881"
+dependencies = [
+ "num-complex",
+ "num-traits",
+ "strided-view",
+ "t4a-faer",
+ "tcontract-exec",
+ "tenferro-ad",
+ "tenferro-cpu",
+ "tenferro-internal-extension-macros",
+ "tenferro-internal-ops",
+ "tenferro-runtime",
+ "tenferro-tensor",
+ "thiserror 2.0.21",
+ "tlinalg",
+]
+
+[[package]]
 name = "tenferro-runtime"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1526,6 +1560,20 @@ name = "tinyvec"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
+
+[[package]]
+name = "tlinalg"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0dac8ca0b7b81f5ac7ede9872145e1d127008e95a7d0fa8efe058567d9969385"
+dependencies = [
+ "num-complex",
+ "strided-view",
+ "t4a-faer",
+ "tcontract-exec",
+ "thiserror 2.0.21",
+ "threadteam",
+]
 
 [[package]]
 name = "tracing"
