@@ -53,6 +53,8 @@ jobs:
           mkdir -p outputs
           cargo run $LOCKED --release -p kdv_pinn -- --epochs 20 \
             --loss-png outputs/kdv-pinn-loss.png --gif outputs/kdv-pinn.gif
+          cargo run $LOCKED --release -p deeponet -- --epochs 100 \
+            --plot outputs/deeponet.png
           cargo run $LOCKED --release -p nqs_rbm -- --system ising-chain --size 8 \
             --steps 100 --samples 256 --validation-sweeps 256 --exact \
             --output-dir outputs/nqs-ising-chain \
