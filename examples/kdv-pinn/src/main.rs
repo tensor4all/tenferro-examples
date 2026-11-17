@@ -29,13 +29,11 @@ mod loss;
 mod pde;
 mod plot;
 mod sampler;
-mod schedule;
 
 use sampler::Sampler;
-use schedule::step_decay_lr;
 use sciml_kit::func::Params;
 use sciml_kit::nn::Mlp;
-use sciml_kit::optim::Adam;
+use sciml_kit::optim::{step_decay_lr, Adam};
 use std::time::Instant;
 use tenferro_ad::TracedTensorAdExt;
 use tenferro_cpu::{runtime_engine_registration, CpuEngine};

@@ -6,6 +6,7 @@ built against the tenferro crates released on crates.io.
 | Example | What it shows | tenferro features |
 | --- | --- | --- |
 | [`kdv-pinn`](examples/kdv-pinn) | Train a physics-informed neural network for the Korteweg-de Vries equation | traced autodiff (`jvp`, `value_and_grad`), one compiled graph per epoch, CPU runtime |
+| [`neural-ode`](examples/neural-ode) | Fit a 2-D spiral ODE with a checkpointed discrete adjoint through an RK4 solver | traced autodiff (`value_and_grad`) through a 10-step solver, one compiled graph per epoch, CPU runtime |
 | [`deeponet`](examples/deeponet) | Learn the antiderivative operator with a DeepONet | traced autodiff (`value_and_grad`), one compiled graph per epoch, host `TensorLinalgExt::cholesky` for the random-field data, CPU runtime |
 | [`nqs-rbm`](examples/nqs-rbm) | Find spin-model ground states with a neural-network quantum state (Carleo and Troyer) | eager autodiff (`backward`), typed-tensor `matmul`, `tenferro-linalg` `solve` and `eigh` |
 
@@ -46,7 +47,8 @@ bump when a new tenferro release is published.
    crates from the workspace (`tenferro-runtime.workspace = true`).
 2. Add a `README.md` that explains the problem and how the code is laid out.
 3. Give it a short mode (like `--epochs`) and add that command to the
-   `Short runs` step in `.github/workflows/ci.yml` and `upstream-main.yml`.
+   `Short runs` step in `.github/workflows/checks.yml`, which `ci.yml` and
+   `upstream-main.yml` both call.
 4. Add a row to the table above.
 
 ## License
