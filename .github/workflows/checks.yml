@@ -63,6 +63,10 @@ jobs:
             --epochs 3
           cargo run $LOCKED --release -p pinn_gauss_newton -- --dim 2 --optimizer adam \
             --epochs 5
+          cargo run $LOCKED --release -p nonlinear_pinn -- --problem burgers \
+            --adam-steps 20 --lbfgs-steps 10 --plot outputs/nonlinear-pinn-burgers.png
+          cargo run $LOCKED --release -p nonlinear_pinn -- --problem allen-cahn \
+            --optimizer adam --adam-steps 20 --plot outputs/nonlinear-pinn-allen-cahn.png
           cargo run $LOCKED --release -p nqs_rbm -- --system ising-chain --size 8 \
             --steps 100 --samples 256 --validation-sweeps 256 --exact \
             --output-dir outputs/nqs-ising-chain \

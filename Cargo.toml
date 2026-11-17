@@ -14,6 +14,7 @@ license = "MIT OR Apache-2.0"
 sciml-kit = { path = "crates/sciml-kit" }
 tenferro-ad = "0.11.0"
 tenferro-cpu = "0.11.0"
+tenferro-fft = "0.11.0"
 tenferro-linalg = "0.11.0"
 tenferro-runtime = "0.11.0"
 tenferro-tensor = "0.11.0"
