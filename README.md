@@ -6,6 +6,7 @@ built against the tenferro crates released on crates.io.
 | Example | What it shows | tenferro features |
 | --- | --- | --- |
 | [`kdv-pinn`](examples/kdv-pinn) | Train a physics-informed neural network for the Korteweg-de Vries equation | traced autodiff (`jvp`, `value_and_grad`), one compiled graph per epoch, CPU runtime |
+| [`deeponet`](examples/deeponet) | Learn the antiderivative operator with a DeepONet | traced autodiff (`value_and_grad`), one compiled graph per epoch, host `TensorLinalgExt::cholesky` for the random-field data, CPU runtime |
 | [`nqs-rbm`](examples/nqs-rbm) | Find spin-model ground states with a neural-network quantum state (Carleo and Troyer) | eager autodiff (`backward`), typed-tensor `matmul`, `tenferro-linalg` `solve` and `eigh` |
 
 ## Running an example
