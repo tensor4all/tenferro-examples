@@ -226,11 +226,11 @@ the $N$ translated copies of one configuration and summed. Reverse mode then
 gives the tied-weight derivative:
 
 ```rust
-let log_psi = runtime.with_eager_session(&mut engine, |session| {
+runtime.with_eager_session(&mut engine, |session| {
     let per_translation = rbm_log_psi(session, &spins, &a, &b, &w)?;
-    session.reduce_sum(&per_translation, None)
+    let loss = session.reduce_sum(&per_translation, None)?;
+    session.backward(&loss)
 })?;
-log_psi.backward(&mut engine)?;
 let gradient = w.grad()?.ok_or("weights did not receive a gradient")?;
 ```
 

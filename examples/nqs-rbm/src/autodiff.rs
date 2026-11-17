@@ -68,11 +68,11 @@ pub(crate) fn tied_gradient(model: &Model, spins: &[f64]) -> Result<Vec<f64>, Bo
         vec![0.0_f64; features],
     )?)?;
     let w = runtime.variable_from(Tensor::from_vec_col_major(vec![features, n], column_major)?)?;
-    let log_psi = runtime.with_eager_session(&mut engine, |session| {
+    runtime.with_eager_session(&mut engine, |session| {
         let per_translation = rbm_log_psi(session, &spins, &a, &b, &w)?;
-        session.reduce_sum(&per_translation, None)
+        let loss = session.reduce_sum(&per_translation, None)?;
+        session.backward(&loss)
     })?;
-    log_psi.backward(&mut engine)?;
     let gradient = w.grad()?.ok_or("weights did not receive a gradient")?;
     let gradient = gradient.as_slice::<f64>()?;
     Ok((0..features)

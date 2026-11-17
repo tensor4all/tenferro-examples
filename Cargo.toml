@@ -10,8 +10,8 @@ license = "MIT OR Apache-2.0"
 # versions; `.github/workflows/upstream-main.yml` replaces them with the
 # tenferro-rs `main` branch to catch breakage before the next release.
 [workspace.dependencies]
-tenferro-ad = "0.11.0"
-tenferro-cpu = "0.11.0"
-tenferro-linalg = "0.11.0"
-tenferro-runtime = "0.11.0"
-tenferro-tensor = "0.11.0"
+tenferro-ad = "0.12.0"
+tenferro-cpu = "0.12.0"
+tenferro-linalg = "0.12.0"
+tenferro-runtime = "0.12.0"
+tenferro-tensor = "0.12.0"

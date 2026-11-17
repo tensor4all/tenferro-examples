@@ -70,11 +70,11 @@ fn parameter_gradients_match_independent_finite_differences() -> Result<(), Box<
     let a = runtime.variable_from(Tensor::from_vec_col_major(vec![3, 1], A.to_vec())?)?;
     let b = runtime.variable_from(Tensor::from_vec_col_major(vec![2, 1], B.to_vec())?)?;
     let w = runtime.variable_from(Tensor::from_vec_col_major(vec![2, 3], W.to_vec())?)?;
-    let loss = runtime.with_eager_session(&mut engine, |session| {
+    runtime.with_eager_session(&mut engine, |session| {
         let output = rbm_log_psi(session, &spins, &a, &b, &w)?;
-        session.reduce_sum(&output, None)
+        let loss = session.reduce_sum(&output, None)?;
+        session.backward(&loss)
     })?;
-    loss.backward(&mut engine)?;
     let epsilon = 1e-6;
     let parameters = [A.to_vec(), B.to_vec(), W.to_vec()];
     for (group, parameter) in [&a, &b, &w].iter().enumerate() {
