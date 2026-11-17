@@ -5,7 +5,7 @@ built against the tenferro crates released on crates.io.
 
 | Example | What it shows | tenferro features |
 | --- | --- | --- |
-| [`kdv-pinn`](examples/kdv-pinn) | Train a physics-informed neural network for the Korteweg-de Vries equation | traced autodiff (`jvp`, `grad`), compiled graphs reused across epochs, CPU runtime |
+| [`kdv-pinn`](examples/kdv-pinn) | Train a physics-informed neural network for the Korteweg-de Vries equation | traced autodiff (`jvp`, `value_and_grad`), one compiled graph per epoch, CPU runtime |
 | [`nqs-rbm`](examples/nqs-rbm) | Find spin-model ground states with a neural-network quantum state (Carleo and Troyer) | eager autodiff (`backward`), typed-tensor `matmul`, `tenferro-linalg` `solve` and `eigh` |
 
 ## Running an example
@@ -15,6 +15,11 @@ Each example is its own crate in this Cargo workspace:
 ```bash
 cargo run --release -p kdv_pinn
 ```
+
+Model and optimizer code that two or more examples share — the traced MLP, the
+ordered parameter set and Adam — lives in [`crates/sciml-kit`](crates/sciml-kit).
+It holds no tenferro wrappers: compiling, preparing and running stay plain
+tenferro calls in each example.
 
 See each example's README for its options and an explanation of the code.
 

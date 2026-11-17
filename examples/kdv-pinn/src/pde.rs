@@ -31,6 +31,13 @@ pub(crate) fn kdv_residual(
 }
 
 /// Return a constant tensor of ones with the same shape and dtype as `tensor`.
+///
+/// The tangent of a `jvp` must be a *data-carrying* tensor: tenferro-ad 0.11
+/// rejects an operation result with `"jvp tangent must have concrete tensor
+/// data"` (`jvp_many_impl`, and the same for a vjp cotangent). A rank-0 constant
+/// expanded with `broadcast_in_dim` is such an operation result, so the ones
+/// cannot be built that way and stay a full-shape constant leaf, built once
+/// when the graph is built rather than once per run.
 fn ones_like(tensor: &TracedTensor) -> Result<TracedTensor> {
     let shape = tensor
         .try_concrete_shape()

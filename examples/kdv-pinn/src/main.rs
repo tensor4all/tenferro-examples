@@ -6,38 +6,44 @@
 //! `t ∈ [0, 1]`. The loss combines the PDE residual in the interior, the initial
 //! condition at `t = 0`, and exact-solution Dirichlet boundary data at `x = ±5`.
 //!
-//! Run the example with:
+//! Train the example with:
 //!
 //! ```bash
-//! cargo run --manifest-path samples/kdv-pinn/Cargo.toml --release
+//! cargo run --release -p kdv_pinn
 //! ```
 //!
 //! Optional outputs are controlled by command-line flags:
 //!
+//! - `--epochs N` sets the number of training epochs (default 3000).
+//! - `--seed K` sets the random seed (default 42); the same seed reproduces a
+//!   run exactly.
 //! - `--gif <path>` writes an animated comparison of the predicted and analytic
 //!   solution over time.
 //! - `--loss-png <path>` writes the training-loss curve (log-scale y-axis).
 //!
 //! ```bash
-//! cargo run --manifest-path samples/kdv-pinn/Cargo.toml --release -- --gif kdv_pinn.gif --loss-png loss.png
+//! cargo run --release -p kdv_pinn -- --gif kdv_pinn.gif --loss-png loss.png
 //! ```
 
 mod loss;
-mod network;
-mod optimizer;
 mod pde;
 mod plot;
 mod sampler;
+mod schedule;
 
-use network::Mlp;
-use optimizer::{step_decay_lr, Adam};
 use sampler::Sampler;
+use schedule::step_decay_lr;
+use sciml_kit::func::Params;
+use sciml_kit::nn::Mlp;
+use sciml_kit::optim::Adam;
+use std::time::Instant;
 use tenferro_ad::TracedTensorAdExt;
 use tenferro_cpu::{runtime_engine_registration, CpuEngine};
 use tenferro_runtime::{
-    CompiledGraph, DType, ExecutionEngine, GraphCompiler, Runtime, TracedTensor,
+    CompiledGraph, DType, ExecutionEngine, GraphCompiler, Prepared, Runtime, TensorRead,
+    TraceContext, TracedTensor,
 };
-use tenferro_tensor::{Tensor, TensorRead};
+use tenferro_tensor::Tensor;
 
 /// Return the value following the given command-line `flag`, if present.
 ///
@@ -59,19 +65,69 @@ fn cpu_runtime(engine: &CpuEngine) -> Result<Runtime, Box<dyn std::error::Error>
     Ok(builder.build()?)
 }
 
+/// The order in which `program` consumes an explicit input for `tensors`.
+///
+/// `compile_many` takes its input order from the trace context, and tenferro
+/// 0.11 has no entrance that accepts an explicit order for several outputs at
+/// once (tenferro-rs#2642), so each declared placeholder is mapped back to its
+/// semantic input index instead of assuming that order. Constant leaves that
+/// carry data — `t_zero` and the `ones` tangents — are semantic inputs too, but
+/// they keep their bound value, and the runtime consumes no explicit input for
+/// them.
+///
+/// (`CompiledGraph::input_key_index` is `#[doc(hidden)]` in tenferro 0.11; it is
+/// the only way to name a program's inputs, which is the same #2642 gap.)
+fn bind_order(program: &CompiledGraph, tensors: &[&TracedTensor]) -> Vec<usize> {
+    let slot = |tensor: &TracedTensor| {
+        let key = tensor
+            .input_key()
+            .expect("a declared placeholder has an input key");
+        program
+            .input_key_index(&key)
+            .expect("a declared placeholder is a program input")
+    };
+    let mut order: Vec<usize> = (0..tensors.len()).collect();
+    order.sort_by_key(|&index| slot(tensors[index]));
+    order
+}
+
+/// The explicit inputs of a program run, given tensors in placeholder order.
+fn ordered_reads<'a>(tensors: &[&'a Tensor], order: &[usize]) -> Vec<TensorRead<'a>> {
+    order
+        .iter()
+        .map(|&index| TensorRead::from_tensor(tensors[index]))
+        .collect()
+}
+
+/// Run a prepared program once and return every output as an owned tensor.
+fn run_prepared(
+    runtime: &Runtime,
+    engine: &mut CpuEngine,
+    prepared: &Prepared,
+    reads: &[TensorRead<'_>],
+) -> Result<Vec<Tensor>, Box<dyn std::error::Error>> {
+    let outputs = runtime.run(&mut [engine], prepared, reads)?;
+    let mut tensors = Vec::with_capacity(outputs.len());
+    for output in outputs {
+        tensors.push(output.into_tensor(engine)?);
+    }
+    Ok(tensors)
+}
+
+/// Compile, prepare and run `output` once, returning its first output.
+///
+/// A one-shot helper for the unit tests; the training loop prepares once and
+/// reuses the [`Prepared`].
+#[cfg(test)]
 fn run_single(
     runtime: &Runtime,
     engine: &mut CpuEngine,
     program: &CompiledGraph,
     inputs: &[&Tensor],
-) -> tenferro_runtime::Result<Tensor> {
+) -> Result<Tensor, Box<dyn std::error::Error>> {
     let reads: Vec<TensorRead<'_>> = inputs.iter().map(|t| TensorRead::from_tensor(t)).collect();
     let prepared = runtime.prepare(program, &reads, &[engine.target()])?;
-    let mut outputs = runtime.run(&mut [engine], &prepared, &reads)?;
-    outputs
-        .remove(0)
-        .into_tensor(engine)
-        .map_err(tenferro_runtime::Error::from)
+    Ok(run_prepared(runtime, engine, &prepared, &reads)?.remove(0))
 }
 
 const N_IC: usize = 128;
@@ -84,21 +140,37 @@ const LAMBDA_BC: f64 = 1.0;
 const LR: f64 = 0.001;
 /// Default number of training epochs; override with `--epochs N`.
 const DEFAULT_EPOCHS: usize = 3000;
+/// Default random seed; override with `--seed K`.
+const DEFAULT_SEED: u64 = 42;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    use rand::SeedableRng;
+
     let epochs = match arg_value("--epochs") {
         Some(value) => value.parse::<usize>()?,
         None => DEFAULT_EPOCHS,
     };
-    let trace = tenferro_runtime::TraceContext::new();
-    let net = Mlp::new(&trace, &[2, 64, 64, 1])?;
-    let mut rng = rand::thread_rng();
-    let mut params = net.init_tensors(&mut rng);
+    let seed = match arg_value("--seed") {
+        Some(value) => value.parse::<u64>()?,
+        None => DEFAULT_SEED,
+    };
+    println!("seed: {} ({} epochs)", seed, epochs);
+
+    let started = Instant::now();
+    let trace = TraceContext::new();
+    let net = Mlp::new(&trace, &[2, 64, 64, 1], TracedTensor::tanh)?;
+    // Parameters first: their placeholders are the leading program inputs.
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let mut params = net.initial_values(&mut rng)?;
 
     let x_ic = trace.input_concrete_shape(DType::F64, &[N_IC, 1])?;
     let u_ic_true = trace.input_concrete_shape(DType::F64, &[N_IC, 1])?;
 
-    let t_zero = trace.from_vec_col_major(vec![N_IC, 1], vec![0.0_f64; N_IC])?;
+    // A rank-0 zero expanded to the column shape: a constant that is not an AD
+    // seed, so it needs no data-carrying leaf (see `pde::ones_like`).
+    let t_zero = trace
+        .from_vec_col_major(vec![], vec![0.0_f64])?
+        .broadcast_in_dim(&[N_IC, 1], &[])?;
     let xt_ic = TracedTensor::stack(&[&x_ic, &t_zero], 1)?.reshape([N_IC, 2])?;
     let u_ic = net.forward(&xt_ic)?;
 
@@ -119,49 +191,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         LAMBDA_BC,
     )?;
 
-    let param_grads: Vec<TracedTensor> = net
-        .parameters()
-        .iter()
-        .map(|p| total_loss.grad(p))
-        .collect::<tenferro_runtime::Result<Vec<_>>>()?;
+    // One reverse pass gives every parameter gradient, and the loss value comes
+    // with them, so an epoch needs one program and one run.
+    let placeholders = net.placeholders();
+    let (loss_value, grads) = total_loss.value_and_grad(&placeholders)?;
+    let grads: Vec<TracedTensor> = grads
+        .into_iter()
+        .map(|grad| grad.expect("every parameter reaches the loss"))
+        .collect();
+    let mut outputs: Vec<&TracedTensor> = Vec::with_capacity(1 + grads.len());
+    outputs.push(&loss_value);
+    outputs.extend(grads.iter());
 
     let mut compiler = GraphCompiler::new();
-    let param_specs = net.input_specs();
-    let col_spec: &[usize] = &[N_COL, 1];
-    let ic_spec: &[usize] = &[N_IC, 1];
-    let bc_spec: &[usize] = &[N_BC, 1];
-    let specs: Vec<(&TracedTensor, DType, &[usize])> = param_specs
+    let program = compiler.compile_many(&outputs)?;
+
+    // The tensors a run binds, in placeholder order: parameters, then data.
+    let data_placeholders: [&TracedTensor; 7] =
+        [&x_col, &t_col, &x_ic, &u_ic_true, &x_bc, &t_bc, &u_bc_true];
+    let bound: Vec<&TracedTensor> = placeholders
         .iter()
-        .map(|(p, dtype, shape)| (*p, *dtype, shape.as_slice()))
-        .chain([
-            (&x_col, DType::F64, col_spec),
-            (&t_col, DType::F64, col_spec),
-            (&x_ic, DType::F64, ic_spec),
-            (&u_ic_true, DType::F64, ic_spec),
-            (&x_bc, DType::F64, bc_spec),
-            (&t_bc, DType::F64, bc_spec),
-            (&u_bc_true, DType::F64, bc_spec),
-        ])
+        .copied()
+        .chain(data_placeholders)
         .collect();
-    let loss_program = compiler.compile_with_input_specs(&total_loss, &specs)?;
-    let grad_programs: Vec<_> = param_grads
-        .iter()
-        .map(|g| compiler.compile_with_input_specs(g, &specs))
-        .collect::<tenferro_runtime::Result<Vec<_>>>()?;
+    let order = bind_order(&program, &bound);
+    println!(
+        "built and compiled the training program in {:.3} s",
+        started.elapsed().as_secs_f64()
+    );
 
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime(&engine)?;
     let sampler = Sampler::new(-5.0, 5.0, 0.0, 1.0);
-    let mut opt = Adam::new(LR);
+    let mut optim = Adam::new(LR);
 
     let mut final_loss = f64::INFINITY;
     let mut loss_history: Vec<f64> = Vec::with_capacity(epochs);
+    // Every epoch has the same input shapes, so one prepared program serves
+    // all of them.
+    let mut prepared: Option<Prepared> = None;
     for epoch in 0..epochs {
         let (x_col_tensor, t_col_tensor) = sampler.collocation(N_COL, &mut rng);
         let (x_ic_tensor, u_ic_tensor) = sampler.initial(N_IC, &mut rng);
         let (x_bc_tensor, t_bc_tensor, u_bc_tensor) = sampler.boundary(N_BC, &mut rng);
 
-        let mut inputs: Vec<&Tensor> = Vec::with_capacity(params.len() + 7);
+        let mut inputs: Vec<&Tensor> = Vec::with_capacity(bound.len());
         inputs.extend(params.iter());
         inputs.extend([
             &x_col_tensor,
@@ -172,18 +246,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &t_bc_tensor,
             &u_bc_tensor,
         ]);
+        let reads = ordered_reads(&inputs, &order);
 
-        let loss_tensor = run_single(&runtime, &mut engine, &loss_program, &inputs)?;
-        final_loss = loss_tensor.as_slice::<f64>().expect("loss data")[0];
+        if prepared.is_none() {
+            prepared = Some(runtime.prepare(&program, &reads, &[engine.target()])?);
+        }
+        let outputs = run_prepared(&runtime, &mut engine, prepared.as_ref().unwrap(), &reads)?;
+
+        final_loss = outputs[0].as_slice::<f64>()?[0];
         loss_history.push(final_loss);
 
-        let mut grads = Vec::new();
-        for program in &grad_programs {
-            grads.push(run_single(&runtime, &mut engine, program, &inputs)?);
-        }
-
-        opt.set_lr(step_decay_lr(epoch, epochs, LR));
-        opt.step(&mut params, &grads);
+        optim.set_lr(step_decay_lr(epoch, epochs, LR));
+        optim.step(&mut params, &outputs[1..]);
 
         if epoch % 50 == 0 {
             println!("epoch {}: loss={:.6e}", epoch, final_loss);
@@ -196,19 +270,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("saved loss curve to {}", loss_png_path);
     }
 
-    // Evaluation grid at t = 0.5.
+    // Evaluation grid at t = 0.5, and the same program for the GIF frames.
     let x_eval = trace.input_concrete_shape(DType::F64, &[N_EVAL, 1])?;
     let t_eval = trace.input_concrete_shape(DType::F64, &[N_EVAL, 1])?;
     let xt_eval = TracedTensor::stack(&[&x_eval, &t_eval], 1)?.reshape([N_EVAL, 2])?;
     let u_eval = net.forward(&xt_eval)?;
+    let eval_program = compiler.compile_many(&[&u_eval])?;
 
-    let mut eval_specs: Vec<(&TracedTensor, DType, &[usize])> = param_specs
+    let eval_bound: Vec<&TracedTensor> = placeholders
         .iter()
-        .map(|(p, dtype, shape)| (*p, *dtype, shape.as_slice()))
+        .copied()
+        .chain([&x_eval, &t_eval])
         .collect();
-    eval_specs.push((&x_eval, DType::F64, &[N_EVAL, 1]));
-    eval_specs.push((&t_eval, DType::F64, &[N_EVAL, 1]));
-    let eval_program = compiler.compile_with_input_specs(&u_eval, &eval_specs)?;
+    let eval_order = bind_order(&eval_program, &eval_bound);
 
     let mut x_eval_data = Vec::with_capacity(N_EVAL);
     let mut u_true_data = Vec::with_capacity(N_EVAL);
@@ -224,10 +298,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut eval_inputs: Vec<&Tensor> = Vec::with_capacity(params.len() + 2);
     eval_inputs.extend(params.iter());
-    eval_inputs.push(&x_eval_tensor);
-    eval_inputs.push(&t_eval_tensor);
+    eval_inputs.extend([&x_eval_tensor, &t_eval_tensor]);
+    let eval_reads = ordered_reads(&eval_inputs, &eval_order);
+    let eval_prepared = runtime.prepare(&eval_program, &eval_reads, &[engine.target()])?;
 
-    let u_pred = run_single(&runtime, &mut engine, &eval_program, &eval_inputs)?;
+    let u_pred = run_prepared(&runtime, &mut engine, &eval_prepared, &eval_reads)?.remove(0);
     let pred = u_pred.as_slice::<f64>().expect("predicted solution data");
     let truth = u_true_tensor.as_slice::<f64>().expect("true solution data");
     let l2_error = pred
@@ -244,13 +319,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut frames: Vec<(f64, Vec<f64>, Vec<f64>)> = Vec::with_capacity(N_FRAMES);
         for frame in 0..N_FRAMES {
             let t = frame as f64 / (N_FRAMES as f64 - 1.0);
-            let t_eval_tensor = Tensor::from_vec_col_major(vec![N_EVAL, 1], vec![t; N_EVAL])?;
+            let t_frame_tensor = Tensor::from_vec_col_major(vec![N_EVAL, 1], vec![t; N_EVAL])?;
             let mut frame_inputs: Vec<&Tensor> = Vec::with_capacity(params.len() + 2);
             frame_inputs.extend(params.iter());
-            frame_inputs.push(&x_eval_tensor);
-            frame_inputs.push(&t_eval_tensor);
+            frame_inputs.extend([&x_eval_tensor, &t_frame_tensor]);
+            let frame_reads = ordered_reads(&frame_inputs, &eval_order);
 
-            let u_pred = run_single(&runtime, &mut engine, &eval_program, &frame_inputs)?;
+            let u_pred =
+                run_prepared(&runtime, &mut engine, &eval_prepared, &frame_reads)?.remove(0);
             let pred = u_pred
                 .as_slice::<f64>()
                 .expect("predicted frame data")

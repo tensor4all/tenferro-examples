@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["examples/*"]
+members = ["crates/*", "examples/*"]
 
 [workspace.package]
 edition = "2021"
@@ -10,6 +10,8 @@ license = "MIT OR Apache-2.0"
 # versions; `.github/workflows/upstream-main.yml` replaces them with the
 # tenferro-rs `main` branch to catch breakage before the next release.
 [workspace.dependencies]
+# Shared model/optimizer code for the SciML examples (see crates/sciml-kit).
+sciml-kit = { path = "crates/sciml-kit" }
 tenferro-ad = "0.11.0"
 tenferro-cpu = "0.11.0"
 tenferro-linalg = "0.11.0"
