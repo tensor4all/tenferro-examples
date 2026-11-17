@@ -171,6 +171,21 @@ impl Adam {
     }
 }
 
+/// Step-decayed learning rate: `base` for the first half of training, then
+/// `base / 2`, then `base / 4`.
+///
+/// Decaying the learning rate sharpens convergence once Adam has reached a
+/// coarse minimum. The KdV PINN and the neural ODE share this shape.
+pub fn step_decay_lr(epoch: usize, total_epochs: usize, base: f64) -> f64 {
+    if epoch < total_epochs / 2 {
+        base
+    } else if epoch < 3 * total_epochs / 4 {
+        base * 0.5
+    } else {
+        base * 0.25
+    }
+}
+
 /// Host arithmetic an Adam step needs from a parameter scalar.
 ///
 /// Real-valued quantities (`norm_sq`, `real`) are `f64` because the update is

@@ -651,6 +651,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "neural_ode"
+version = "0.1.0"
+dependencies = [
+ "plotters",
+ "rand",
+ "sciml-kit",
+ "tenferro-ad",
+ "tenferro-cpu",
+ "tenferro-runtime",
+ "tenferro-tensor",
+]
+
+[[package]]
 name = "nqs_rbm"
 version = "0.1.0"
 dependencies = [

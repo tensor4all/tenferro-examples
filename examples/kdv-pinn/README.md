@@ -227,10 +227,9 @@ optimizer code it shares with the other SciML examples in `crates/sciml-kit`:
 | --- | --- |
 | `crates/sciml-kit/src/nn.rs` | Builds the MLP from `TracedTensor` parameter placeholders (Xavier initialization, activation as a parameter). |
 | `crates/sciml-kit/src/func.rs` | The ordered parameter set: placeholders and initial values in one fixed order. |
-| `crates/sciml-kit/src/optim.rs` | `Sgd` and `Adam` updates on the concrete parameter tensors. |
+| `crates/sciml-kit/src/optim.rs` | `Sgd` and `Adam` updates on the concrete parameter tensors, plus the step-decayed learning-rate schedule. |
 | `src/pde.rs` | Builds the KdV residual with chained `jvp` calls for `u_t`, `u_x`, `u_xx`, and `u_xxx`. |
 | `src/loss.rs` | Combines PDE, initial-condition, and boundary losses with scalar weights. |
-| `src/schedule.rs` | Decays the learning rate over the run. |
 | `src/sampler.rs` | Samples collocation, initial-condition, and boundary points. |
 | `src/plot.rs` | Writes optional loss-curve PNG and solution-comparison GIF outputs. |
 
