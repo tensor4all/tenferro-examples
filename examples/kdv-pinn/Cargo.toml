@@ -7,6 +7,7 @@ publish = false
 description = "Physics-informed neural network for the KdV equation with tenferro traced autodiff"
 
 [dependencies]
+sciml-kit.workspace = true
 tenferro-ad.workspace = true
 tenferro-cpu.workspace = true
 tenferro-runtime.workspace = true

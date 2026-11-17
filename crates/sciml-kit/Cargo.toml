@@ -1,0 +1,12 @@
+[package]
+name = "sciml-kit"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Model, parameter and optimizer building blocks shared by the SciML examples"
+
+[dependencies]
+tenferro-runtime.workspace = true
+tenferro-tensor.workspace = true
+rand = "0.8"

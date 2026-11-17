@@ -170,6 +170,11 @@ epochs on CPU. Pass `--epochs N` for a shorter run:
 cargo run --release -p kdv_pinn -- --epochs 20
 ```
 
+`--seed K` sets the random seed used for the network initialization and for
+every sampled batch; the default is 42 and the same seed reproduces a run
+exactly. The run prints the seed, and the time spent building and compiling the
+training program, as its first two lines.
+
 Optional plot outputs are available:
 
 ```bash
@@ -188,23 +193,60 @@ CI runs the unit tests and a 20-epoch training run that also writes both plots,
 which are uploaded as workflow artifacts. It does not run the full 3000-epoch
 training.
 
+## Results And Cost
+
+The accuracy metric is the relative $L^2$ error of the predicted
+$u_\theta(\cdot, 0.5)$ against the exact soliton on 100 equally spaced points of
+`[-5, 5]`, after the default 3000 epochs.
+
+Measured on an AMD Ryzen AI MAX+ 395 with the serial CPU engine (one worker
+thread), `--release`, no plot output. "build + compile" is the time from process
+start to the first epoch, i.e. building the traced graph and compiling its
+programs; the per-epoch figure is derived from a 3000-epoch run.
+
+| training program | relative $L^2$ error at $t = 0.5$ | final loss | build + compile | per epoch |
+| --- | --- | --- | --- | --- |
+| one per parameter gradient | 1.6e-2 … 2.4e-2 | 4.5e-4 … 1.2e-3 | 0.02 s (7 training programs plus the evaluation one) | 104 ms |
+| one for the loss and all gradients | 1.3e-2 … 3.3e-2 | 3.9e-4 … 7.8e-4 | 0.005 s (the training program; the evaluation program is compiled after training) | 27 ms |
+
+Both rows are ranges over three runs: three seeds after the migration, three
+unseeded runs before it. The forward pass now happens once per epoch instead of
+once per parameter gradient, so the run is 3.9x faster at the same accuracy, and
+peak memory drops from 158 MB to 134 MB.
+
+Reversing a graph that already contains the three nested `jvp` calls (for
+$u_x$, $u_{xx}$ and $u_{xxx}$) does not make compilation expensive: the whole
+training program, loss and six gradients, compiles in 5 ms.
+
 ## How It Is Structured
 
-The sample keeps each PINN concern in a small module:
+The sample keeps each PINN concern in a small module, and the model and
+optimizer code it shares with the other SciML examples in `crates/sciml-kit`:
 
 | File | Role |
 | --- | --- |
-| `src/network.rs` | Builds the MLP from `TracedTensor` parameter placeholders. |
+| `crates/sciml-kit/src/nn.rs` | Builds the MLP from `TracedTensor` parameter placeholders (Xavier initialization, activation as a parameter). |
+| `crates/sciml-kit/src/func.rs` | The ordered parameter set: placeholders and initial values in one fixed order. |
+| `crates/sciml-kit/src/optim.rs` | `Sgd` and `Adam` updates on the concrete parameter tensors. |
 | `src/pde.rs` | Builds the KdV residual with chained `jvp` calls for `u_t`, `u_x`, `u_xx`, and `u_xxx`. |
 | `src/loss.rs` | Combines PDE, initial-condition, and boundary losses with scalar weights. |
+| `src/schedule.rs` | Decays the learning rate over the run. |
 | `src/sampler.rs` | Samples collocation, initial-condition, and boundary points. |
-| `src/optimizer.rs` | Applies Adam updates to the concrete parameter tensors. |
 | `src/plot.rs` | Writes optional loss-curve PNG and solution-comparison GIF outputs. |
 
-The graph-building phase creates placeholders for network parameters and
-training batches, then compiles a scalar loss program plus one gradient program
-per parameter. The training loop reuses those compiled programs with fresh
-sampled tensors at every epoch.
+The graph-building phase creates placeholders for network parameters first and
+training batches after them, then compiles **one** program whose outputs are the
+loss and every parameter gradient, and prepares it **once**. Each epoch samples
+fresh tensors, binds them, and runs that one prepared program, so the forward
+pass happens once per epoch instead of once per parameter gradient.
+
+Constants are written inline rather than as full-size host buffers, with one
+exception. The `t = 0` column is a rank-0 zero expanded with
+`broadcast_in_dim`. The ones used as `jvp` tangents are not: the tangent of a
+`jvp` (and the cotangent of a `vjp`) must carry concrete data, and tenferro 0.11
+rejects an operation result such as a broadcast with `"jvp tangent must have
+concrete tensor data"`, so `ones_like` stays a full-shape constant leaf. Both
+are built once when the graph is built, so neither costs anything per epoch.
 
 ## Traced Autodiff Pattern
 
@@ -240,21 +282,21 @@ loss = lambda_pde * mean(residual^2)
 This is different from scaling the residual before squaring it, which would
 apply the PDE weight twice.
 
-After the scalar `total_loss` tensor is built, the sample requests one gradient
-per parameter placeholder:
+After the scalar `total_loss` tensor is built, one reverse pass gives the loss
+and every parameter gradient together:
 
 This abbreviated autodiff fragment intentionally omits its surrounding network definition.
 ```rust
-let param_grads: Vec<TracedTensor> = net
-    .parameters()
-    .iter()
-    .map(|p| total_loss.grad(p))
-    .collect::<tenferro_runtime::Result<Vec<_>>>()?;
+let (loss_value, grads) = total_loss.value_and_grad(&net.placeholders())?;
+let grads: Vec<TracedTensor> = grads.into_iter().flatten().collect();
+let mut outputs: Vec<&TracedTensor> = vec![&loss_value];
+outputs.extend(grads.iter());
+let program = compiler.compile_many(&outputs)?;
 ```
 
 Those gradients are $\partial\mathcal{L}/\partial W_\ell$ and
-$\partial\mathcal{L}/\partial b_\ell$. The compiled gradient programs are
-executed each epoch, and Adam applies the resulting concrete tensors to the
+$\partial\mathcal{L}/\partial b_\ell$. The single compiled program is prepared
+once and executed each epoch; Adam applies the resulting concrete tensors to the
 current parameter buffers.
 
 ## When To Use This Pattern
