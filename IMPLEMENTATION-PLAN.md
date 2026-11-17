@@ -1,532 +1,462 @@
-# IMPLEMENTATION-PLAN — tenferro-examples#12 (`neural-ode`)
+# IMPLEMENTATION-PLAN — tenferro-examples#8 (`pinn-gauss-newton`)
 
-Issue: <https://github.com/tensor4all/tenferro-examples/issues/12> (part of the
-SciML umbrella #6, after #7/#10).
-Repo: `~/projects/tensor4all/tenferro-examples`, worktree
-`~/projects/tensor4all/tenferro-examples-12`, branch `feat/12-neural-ode`,
-base `origin/main` = c946ff9 (adds #7 `sciml-kit` and #10 `deeponet`).
-Deliverable: one PR, no merge, no tenferro change.
+Issue: <https://github.com/tensor4all/tenferro-examples/issues/8> (ai-ready; the
+accepted Jacobian decision is the issue comment of 2026-11-18 — "use option
+(a)").
+Umbrella conventions: <https://github.com/tensor4all/tenferro-examples/issues/6>.
+Repo/worktree: `~/projects/tensor4all/tenferro-examples-8`, branch
+`feat/8-pinn-gauss-newton`, base `origin/main` = `29db186` (adds #7 `sciml-kit`,
+#10 `deeponet`, #12 `neural-ode`).
+Deliverable: one PR, no merge, no tenferro change. #9 is not started.
 
-## 0. APIs used, verified in the pinned 0.11.0 sources
+## 0. The method this implements
 
-Registry root `~/.cargo/registry/src/index.crates.io-*/`; the workspace
-`Cargo.lock` pins every `tenferro-*` crate to 0.11.0.
+For the residual vector `r(θ)` (PDE rows + boundary rows), the parameter
+Jacobian is taken in **one reverse pass** by feeding the parameters a second
+time as a *per-point copy*:
 
-| API | Evidence |
+```text
+θ_b   : program input, shape [P_k..., N] with N = number of points
+r     : residual computed with θ_b (batched dot_general, batch axis = point)
+J^T   : grad(sum(r), θ_b)      -> shape [P_k..., N], one partial per row
+```
+
+`θ_b` is bound by the host as an explicit broadcast copy of `θ` each step. This
+is the accepted decision: no new tenferro API, `grad(sum(r), θ_b)` gives the
+Jacobian rows.
+
+Levenberg–Marquardt step, **inside the graph**, `(JᵀJ + λI) δ = −Jᵀ r`, then the
+non-linear candidate `r(θ+δ)` and the linear prediction, so one program run and
+one read-back per iteration produce everything the host decision needs
+(convention 3). `λ` is a program input placeholder; the linear solve is **not**
+differentiated (the AD transform is applied to `sum(r)`, which is upstream of
+the Cholesky, so the factorization is outside the differentiated subgraph).
+
+## 1. Files, functions and current behaviour
+
+All files are new except §1.8–§1.10. "Current behaviour" for a new file is
+"does not exist".
+
+### 1.1 `examples/pinn-gauss-newton/Cargo.toml` — new crate `pinn_gauss_newton`
+
+Same dependency set as `examples/deeponet` (`sciml-kit`, `tenferro-ad`,
+`tenferro-cpu`, `tenferro-linalg`, `tenferro-runtime`, `tenferro-tensor`,
+`plotters` with `bitmap_backend`/`bitmap_encoder`/`line_series`, `rand 0.8`),
+all already in the workspace or in the tree. No new external dependency.
+
+### 1.2 `src/network.rs` (+ `src/network/tests.rs`) — the model, two layouts
+
+The per-point formulation forces a **points-last** layout, because tenferro's
+`dot_general` puts batch axes last (`tenferro-tensor-0.11.0/src/config.rs`
+"Output layout" doc, `tenferro-runtime-0.11.0/src/shape_infer.rs:813`): with
+`x [in, N]` and `W [out, in, N]` the result is `[out, N]`. `sciml-kit`'s `Mlp`
+is points-first (`x [n, in] · W [in, out] → [n, out]`,
+`crates/sciml-kit/src/nn.rs:44`), so it cannot express this layout without a
+transpose per layer.
+
+```rust
+pub(crate) struct Model { sizes: Vec<usize>, points: Option<usize>, params: Vec<TracedTensor> }
+impl Model {
+    fn new(trace: &TraceContext, sizes: &[usize], points: Option<usize>) -> Result<Self>;
+    fn params(&self) -> Vec<&TracedTensor>;          // [w1,b1,w2,b2,w3,b3]
+    fn sizes(&self) -> &[usize];
+    fn initial_values(&self, rng: &mut impl Rng) -> Result<Vec<Tensor>>;
+    fn forward(&self, params: &[&TracedTensor], x: &TracedTensor) -> Result<TracedTensor>;
+}
+impl sciml_kit::func::Params for Model { /* placeholders + initial_values */ }
+```
+
+- weight `[out, in]`, bias `[out, 1]` when `points == None`; weight
+  `[out, in, N]`, bias `[out, N]` when `points == Some(N)`.
+- `forward` is **one** function; `points.is_some()` only selects the
+  `dot_general` batch axes (`[]`/`[]` vs `[1]`/`[2]`). The bias add broadcasts
+  in both layouts (`add` is NumPy-broadcasting, `traced.rs:751`).
+- `initial_values`: the existing Xavier-uniform formula from
+  `crates/sciml-kit/src/nn.rs:104-119` (the only duplicated 12 lines), drawing
+  `[out, in]` values and then **tiling along the last axis** when per-point, so
+  the same seed gives the same θ in both layouts. The plane/points equality is
+  unit-tested (§2.1).
+
+One model serves both optimizers, so the Adam and LM runs start from the *same*
+θ and the comparison is apples to apples. Consequence: `sciml-kit`'s `Mlp` is
+not used by this example (see §4, rejected alternative).
+
+`src/network/tests.rs`: initial-value tiling equality; `forward` shape check in
+both layouts; `forward` of the plain model equals the per-point model fed the
+tiled parameters (evaluated through the runtime).
+
+### 1.3 `src/poisson.rs` (+ tests) — points, forcing, residual, Jacobian
+
+```rust
+pub(crate) struct Points { pub collocation: Tensor /* [dim, n_col] */, pub boundary: Tensor /* [dim, n_bc] */ }
+pub(crate) fn points(dim: usize, n_col: usize, n_bc: usize, seed: u64) -> Points;
+pub(crate) fn pde_residual(model: &Model, params: &[&TracedTensor], x: &TracedTensor,
+                           dim: usize) -> Result<TracedTensor>;          // [1, n]
+pub(crate) fn residual(model: &Model, params: &[&TracedTensor], x_col: &TracedTensor,
+                       x_bc: &TracedTensor, dim: usize) -> Result<TracedTensor>; // [N, 1]
+pub(crate) fn jacobian_transposed(r: &TracedTensor, params: &[&TracedTensor]) -> Result<TracedTensor>; // [P, N]
+pub(crate) fn exact(dim: usize, x: &[f64]) -> Vec<f64>;                 // sin(pi x), sin sin
+```
+
+- Problem: 1-D `-u'' = π² sin(πx)`, 2-D `-Δu = 2π² sin(πx) sin(πy)`, exact
+  `u = sin(πx)` / `sin(πx) sin(πy)`, zero Dirichlet data.
+- Points: uniform on `[0,1]` from a seeded RNG, fixed for the whole run (the
+  ρ test needs one fixed residual vector). 1-D boundary = `x = 0, 1`; 2-D
+  boundary = the four edges, `n_bc` points each. Collocation and boundary
+  points are concatenated into **one** `[dim, n_col+n_bc]` placeholder, so one
+  per-point parameter set and one gradient list cover both groups; the residual
+  splits them with two static column slices (`slice`, `traced.rs:2184`) instead
+  of carrying two parameter groups. (Post-review refinement, §7.)
+- Second derivatives stay nested `jvp` against the traced `x`, exactly as in
+  `examples/kdv-pinn/src/pde.rs:22`; the seeds are full-shape data-carrying
+  constants (a `broadcast_in_dim` result is not a valid tangent,
+  `examples/kdv-pinn/src/pde.rs:31`), built once at graph build.
+- Group scaling: `r = [r_pde / sqrt(n_col); r_bc / sqrt(n_bc)]`, i.e. one mean
+  square per group as in `examples/kdv-pinn/src/loss.rs:33-53`, so the boundary
+  rows are not swamped 2048:2 by the PDE rows. Documented in the README.
+- `jacobian_transposed` = `grad_many(&params)` of `sum(r)`
+  (`tenferro-ad-0.11.0/src/traced.rs:921`), each row tensor reshaped to
+  `[P_k, N]` and `concatenate`d along axis 0, in parameter order.
+
+### 1.4 `src/lm.rs` (+ tests) — graph step and host decision
+
+```rust
+pub(crate) struct Step { pub delta: TracedTensor, pub predicted: TracedTensor } // [P,1], rank-0
+pub(crate) fn solve_step(jt: &TracedTensor, r: &TracedTensor, lambda: &TracedTensor) -> Result<Step>;
+pub(crate) struct Decision { pub accept: bool, pub rho: f64, pub next_lambda: f64 }
+pub(crate) fn decide(lambda: f64, loss: f64, loss_candidate: f64, predicted: f64) -> Decision;
+pub(crate) fn is_numerical_failure(error: &tenferro_runtime::Error) -> bool;
+pub(crate) const LAMBDA_MIN: f64 = 1e-6; pub(crate) const LAMBDA_MAX: f64 = 1e6;
+```
+
+Graph: `H = JᵀJ = matmul(jt, transpose(jt))` `[P,P]`; `g = matmul(jt, r)` `[P,1]`;
+`λI = lambda [rank-0] .broadcast_in_dim([P], []) .embed_diag(0, 1)`;
+`L = (H + λI).cholesky()` (`tenferro-linalg-0.11.0/src/traced.rs:190`);
+`delta = -(L.triangular_solve(g, left_side=true, lower=true, transpose_a=false,
+unit_diagonal=false))` (`:299`); `predicted = 0.5*(‖r‖² − ‖r + Jδ‖²)`.
+`‖·‖²` is `reduce_sum_squares(None)`; `r + Jδ` is `matmul(transpose(jt), delta)`.
+
+`decide` (tested as a table): `rho = (loss − loss_candidate)/predicted` (NaN or
+`predicted <= 0` ⇒ reject with `rho = NEG_INFINITY`); accept iff `rho > 0`;
+accepted ⇒ `rho > 0.75 ? λ/3 : rho < 0.25 ? 2λ : λ`; rejected ⇒ `10λ`; result
+clamped to `[LAMBDA_MIN, LAMBDA_MAX]`.
+
+`is_numerical_failure` = `matches!(error.kind(), ErrorKind::NumericalFailure)`
+(`tenferro-runtime-0.11.0/src/error.rs:783`; the `Extension { kind, .. }` arm is
+`:798`; the Cholesky non-PD path is
+`tenferro-linalg-0.11.0/src/backend.rs:44-46` → `Extension` +
+`ErrorKind::NumericalFailure`).
+
+### 1.5 `src/plot.rs` (+ tests) — loss curve
+
+`pub(crate) fn write_loss_png(path: &str, curves: &[(&str, &[(f64, f64)])]) -> Result<(), Box<dyn Error>>`:
+one panel, x = cumulative wall time in seconds, y = loss on a log axis, one
+polyline per curve. Colours only, no text (`plotters` without a font backend
+panics, see `examples/neural-ode/src/plot.rs:4`); the README states the mapping.
+Reuses the bounds helpers of the same file with the module's own copy (they are
+40 lines; copying two small functions is smaller than a shared crate for one
+figure).
+
+### 1.6 `src/main.rs` — CLI, programs, loops
+
+Flags: `--dim 1|2` (default 1), `--optimizer adam|lm|both` (default `lm`),
+`--epochs N` (default 40 for `lm`, 2000 for `adam`; for `lm` it is the number of
+LM iterations), `--seed K` (default 42), `--plot <path>`.
+
+Default configuration — pinned here because the README's copy cost, the cost
+estimate in §4 and the CI budget all depend on it:
+
+| constant | value |
 | --- | --- |
-| `TracedTensor::mul` / `sub` / `add` | `tenferro-runtime-0.11.0/src/traced.rs:815`, `:…` |
-| `TracedTensor::abs` (AD rule: `sign(primal)`) | `traced.rs:1076`; `tenferro-ad-0.11.0/src/semantic_transform.rs:555` (jvp), `:734` (vjp) |
-| `TracedTensor::tanh`, `scale_real`, `reduce_sum(None)` | `traced.rs:1281`, `:1118`, `:1672` |
-| `TracedTensor::stack(&[&Self], isize)` (inserts a new axis) | `tenferro-runtime-0.11.0/src/shape_packing.rs:589` |
-| `TraceContext::input_concrete_shape(DType, &[usize])` | `tenferro-runtime-0.11.0/src/trace_ops.rs:245`; used by `deeponet/src/main.rs:100` |
-| `TracedTensorAdExt::value_and_grad(&[&TracedTensor])` | `tenferro-ad-0.11.0/src/traced.rs:946` (trait), `:1116` (impl) |
-| `GraphCompiler::compile_many(&[&TracedTensor])` | `tenferro-runtime-0.11.0/src/graph/compiler.rs:192` |
-| `Runtime::prepare` / `run`, `Output::into_tensor`, `TensorRead::from_tensor` | `runtime/snapshot.rs:979`, `:1020`, `runtime/engine.rs:304` |
-| `Tensor::from_vec_col_major`, `as_slice` / `as_slice_mut` | used by `kdv-pinn/src/pde.rs`, `sciml-kit/src/optim.rs` |
+| layer sizes | `[dim, 32, 32, 1]` (two hidden layers of width 32) |
+| parameters P | **1153** (1-D), **1185** (2-D) |
+| collocation points `n_col` | 2048 |
+| boundary points `n_bc` | 2 (1-D: `x = 0, 1`), 128 (2-D: 4 edges × 32) |
+| residual dimension N | 2050 (1-D), 2176 (2-D) |
+| `λ₀` | `1e-3`, clamped to `[LAMBDA_MIN, LAMBDA_MAX] = [1e-6, 1e6]` |
+| Adam learning rate | `step_decay_lr(epoch, epochs, 1e-3)` |
+| evaluation grid | 200 points (1-D), 60 × 60 (2-D) |
+| per-step copy cost `(n_col+n_bc)·P·8` | 18.9 MB (1-D), 20.6 MB (2-D) |
 
-Program input order: `compile_many` takes the trace creation order (no explicit
-order for several outputs, tenferro-rs#2642), data-carrying constants created
-by AD are program inputs but keep their bound value, so the explicit reads are
-the placeholders in creation order. This is exactly the pattern `deeponet`
-ships (`deeponet/src/main.rs`, "Parameters are created first..."), so no
-`bind_order` helper is needed here: parameters first, then `z0`, then the
-window targets, then the AD seeds.
+All four constants are command-line-independent (no flags for them); the cost
+fallback in §4 risk 2 is the only thing that would move them, and that change
+would be reported.
 
-## 1. Design
+`fn cpu_runtime` as in `examples/deeponet/src/main.rs:66` **plus**
+`builder.install_extension_module(tenferro_linalg::extension_module::<CpuEngine>(
+tenferro_cpu::runtime_engine_id()?)?)` — required by every traced linalg op
+(`tenferro-linalg-0.11.0/src/lib.rs:31-45` example;
+`RuntimeBuilder::install_extension_module`, `tenferro-runtime-0.11.0/src/runtime/snapshot.rs:1276`).
 
-### 1.1 Problem and data (host, no traced ops)
+LM program (`--optimizer lm`): inputs in creation order `[θ_b..., x, λ]` (8
+inputs: 6 parameter tiles, the point tensor, the damping scalar); outputs
+`[δ [P,1], loss, loss_candidate, predicted]`, where the candidate
+residual uses `θ_b + broadcast(reshape(slice(δ, block_k), plain_shape_k),
+[plain_shape_k..., N])` built in-graph (`slice`, `traced.rs:2184`;
+`broadcast_in_dim`, `:2051`), so the whole ρ test needs one read-back. The
+`Prepared` is created once before the loop (all inputs have fixed shapes) and
+reused for every iteration — including after a failed run, which is asserted by
+the retry test (§2.3).
 
-`dz/dt = A z³` elementwise cube, `A = [[-0.1, 2.0], [-2.0, -0.1]]`,
-`z(0) = [2, 0]`, sampled at `N_SAMPLES = 1000` equally spaced times on `[0, 25]`.
+Cholesky failure: `runtime.run` returns `Err` whose `kind()` is
+`NumericalFailure` (`.../src/runtime/execution.rs:414`, `:685-693` retires the
+run and hands back the error) ⇒ raise `λ = min(10λ, LAMBDA_MAX)`, retry the same
+iteration (retries do not advance the iteration counter); at `LAMBDA_MAX` the
+error is returned. A NaN/`predicted <= 0` run is handled by the same reject
+branch. Both paths are counted and printed.
 
-- `H = 25 / 999` is the solver step, i.e. a training window of
-  `WINDOW_STEPS = 10` RK4 steps spans `≈0.25` time units.
-- Reference trajectory: host RK4 with `SUBSTEPS = 100` per sample interval
-  (`h_ref = H/100 ≈ 2.5e-4`), stored column-major as `[N_SAMPLES, 2]`
-  (`states[i + N_SAMPLES * c]`). No new dependency: a 20-line host loop.
-  The convergence check in §3/§4 shows `h_ref` and `2*h_ref` agree far below
-  the training error.
-- `minibatch(starts) -> (Tensor [B, 2] z0, Tensor [B, 2, WINDOW_STEPS] targets)`.
-  `targets[b, c, k]` is the reference state at `start[b] + k + 1`; the layout is
-  `b + B*c + B*2*k` column-major. Includes `k = 1..=10`, not the given `z0`
-  (a zero term would only rescale the loss).
+Host θ stays in the plain shapes `[out, in]`/`[out, 1]`; `fn tile(&[Tensor], n)`
+builds the per-point copies (this is the documented per-step cost) and
+`fn apply_delta(&mut [Tensor], &[f64])` adds the accepted `δ` block by block.
 
-### 1.2 Model, solver, loss (traced)
+Adam program (`--optimizer adam`): the plain model, `value_and_grad(&params)`
+over `loss = 0.5‖r‖²`, one program, one `Prepared`, `sciml_kit::optim::Adam`
+with `step_decay_lr(epoch, epochs, 1e-3)`, as in `examples/kdv-pinn/src/main.rs:200`.
 
-- `model::rhs(&Mlp, z)`: `z³ = z.mul(z)?.mul(z)?`, then `net.forward(&z³)`.
-  `f_θ` is `Mlp::new(&trace, &[2, 50, 2], TracedTensor::tanh)` from
-  `sciml-kit`; its 4 placeholders (W1, b1, W2, b2) are the parameter order.
-  `Linear::forward` is `x.dot_general(W, contract x's last axis with W's
-  first)`, i.e. `out[b,j] = Σ_i x[b,i] W[i,j]` (`sciml-kit/src/nn.rs:39-46`),
-  so the column-vector form is `Wᵀ x`: a weight placeholder filled with `W`
-  realizes `A z³` when `W = Aᵀ`. The model test in §3 does exactly that.
-- `ode::rollout(rhs, z0, h, steps) -> Vec<TracedTensor>`: fixed-step RK4,
-  one state after each step. `ode::rk4_step` is the textbook four-stage update,
-  generic over `Fn(&TracedTensor) -> Result<TracedTensor>` so it can move to
-  `tenferro-diffeq` later (issue requirement).
-- Loss: `pred = stack(states, axis 2)` → `[B, 2, 10]`;
-  `loss = mean(|pred - targets|)` = `diff.abs()?.reduce_sum(None)? / (B*2*10)`.
-- One reverse pass: `loss.value_and_grad(&net.placeholders())` → loss + 4 grads,
-  then `compile_many(&[loss, grads...])` → **one** program, prepared **once**
-  (shapes are constant), run once per epoch.
+After training: evaluate `u` on a fixed grid (1-D: 200 points, 2-D: 60×60),
+print the relative L2 error against the exact solution, optionally write the
+loss figure, and print a one-line machine-readable summary
+(`optimizer, dim, steps, wall time, final loss, relL2`).
 
-### 1.3 Training loop and CLI
+### 1.7 `examples/pinn-gauss-newton/README.md` + committed figure
 
-- `--epochs N` default `20_000`, `--seed K` default `42` (repo convention),
-  `--plot PATH` optional.
-- Per epoch: `BATCH = 64` random window starts in `0..N_SAMPLES - WINDOW_STEPS`
-  (`0..990`, so `start + 10 ≤ 999`), bind params + `z0` + `targets`, run,
-  `Adam` step. Learning rate `1e-3` through `sciml_kit::optim::step_decay_lr`
-  (base for the first half, half for the third quarter, quarter for the last
-  quarter — the kdv schedule moved verbatim).
-- Print: seed/config, data generation time, graph build + compile time,
-  loss every 500 epochs, final loss, full-trajectory relative L2 error, training
-  wall time; then plot if requested.
+Problem and exact solution; the per-point-copy Jacobian (with the batch-last
+layout consequence); **the per-step copy cost** (`(n_col+n_bc)·P·8` bytes, with
+the default numbers) and **the prepare signature** (input order and shapes,
+"prepared once, reused for every iteration"); the LM step and the ρ/λ rules;
+the Cholesky-failure policy; collocation fixed per run; the Adam baseline; the
+results table (1-D and 2-D × Adam/LM: steps, wall time, final loss, relL2);
+the figure (colour → optimizer); what is deliberately not done (lstsq variant,
+JAX baseline); the tenferro gaps this hits (input donation tenferro-rs#2419,
+input naming tenferro-rs#2642). The committed `loss.png` is produced by
+`--optimizer both --plot`.
 
-### 1.4 Evaluation (full 999-step trajectory)
+### 1.8 `.github/workflows/checks.yml` — short runs (current: 4 examples)
 
-A forward-only program is built in the same trace after training:
-`z_eval = input_concrete_shape(F64, &[1, 2])`, `rollout(..., WINDOW_STEPS)`,
-`compile_many` of its 10 outputs. Prepare once with `params + z_eval`, then chain
-the same prepared program 100 times on the host (10 RK4 steps = 10 samples per
-run), feeding the last output back as the next `z_eval`. 100 windows cover 1000
-steps; the trajectory has 999 intervals, so the last output (t = 25 + H) is
-dropped and the first 999 states are compared with the reference. The number of
-runs is `(N_SAMPLES - 1).div_ceil(WINDOW_STEPS) = 100`, and `main` asserts that
-the collected buffer holds exactly `N_SAMPLES` states before computing the
-metric, so a wrong feed-back index or a dropped state fails loudly there.
+Add three lines to the `Short runs` step:
+`-p pinn_gauss_newton --dim 1 --optimizer both --epochs 3 --plot outputs/pinn-gauss-newton.png`,
+`--dim 1 --optimizer adam --epochs 20`, `--dim 2 --optimizer lm --epochs 2`.
+Together well under the current CI time.
 
-No 999-step graph is compiled: the compiled unit stays the 10-step window, as
-the issue asks ("unrolled inside one traced graph per window length").
+### 1.9 root `README.md` — one table row
 
-Metric: `relative L2 = sqrt(Σ |z_pred - z_true|² / Σ |z_true|²)` over both
-components and all 1000 samples. Printed and reported in the README.
+### 1.10 `IMPLEMENTATION-PLAN.md` / `WORKLOG.md` — this plan and the log
 
-### 1.5 Figure
+Both are tracked at the repo root on `main` (from the #7/#12 PRs), so they are
+replaced, not left untracked.
 
-`plot::write_figure_png(path, times, truth, pred, loss_history)`: one 1400×420
-image, three panels — z₁(t), z₂(t) (blue = reference, red = prediction) and the
-loss (red, log y). No text (`plotters` has no font backend in this workspace,
-same as the other examples), stated in the README. The PNG is committed only
-after the full 20k run (`neural_ode.png`), as `deeponet` does.
-
-## 2. Files and functions changed
-
-New example `examples/neural-ode` (package `neural_ode`):
-
-| File | Contents |
-| --- | --- |
-| `Cargo.toml` | deps `sciml-kit` and `tenferro-{ad,cpu,runtime,tensor}` from `[workspace.dependencies]`, plus `rand = "0.8"` and `plotters` (bitmap backend/encoder, line series) declared per package like the other examples; all already in the lockfile |
-| `src/main.rs` | flags, ground-truth generation, graph build, training loop, evaluation, figure. `#[cfg(test)] run_single` helper copied from `kdv-pinn/src/main.rs:123` (its tests need a one-shot prepare+run) |
-| `src/model.rs` | `MLP_SIZES`, `rhs(net, z)` |
-| `src/ode.rs` | `rk4_step`, `rollout` |
-| `src/data.rs` | `N_SAMPLES`, `WINDOW_STEPS`, `H`, `SUBSTEPS`, `velocity`, `Dataset::{generate, minibatch}` |
-| `src/plot.rs` | `linear_bounds`, `log_bounds`, `write_figure_png` |
-| `README.md` | problem, model, data, training, results/cost table, figure, code layout, tenferro notes, stretch status |
-| `.gitignore` | `*.png` with `!neural_ode.png` (same as `deeponet`) |
-| `src/*/tests.rs` | see §3 |
-
-Shared change (now two examples use it):
-`crates/sciml-kit/src/optim.rs` gains `pub fn step_decay_lr(epoch, total, base)`
-and its test (moved from `examples/kdv-pinn/src/schedule.rs` +
-`schedule/tests.rs`; the body and test are verbatim, the stale module doc
-("no other example uses this shape yet") is rewritten to say the schedule now
-lives here); `examples/kdv-pinn/src/main.rs` imports it from
-`sciml_kit::optim`, and `examples/kdv-pinn/src/schedule.rs` /
-`src/schedule/tests.rs` are deleted. kdv's README structure table drops its
-`schedule.rs` row and names the schedule on the `sciml-kit/src/optim.rs` row.
-This is the kit's own rule ("holds model and optimizer code that two or more
-examples use"); behaviour of kdv is unchanged.
-
-Root/CI:
-- `Cargo.lock`: new `neural_ode` package entry (only existing deps).
-- `README.md`: one table row.
-- `.github/workflows/checks.yml` (shared by `ci.yml` and `upstream-main.yml`):
-  `cargo run $LOCKED --release -p neural_ode -- --epochs 20 --plot outputs/neural-ode.png`
-  in the `Short runs` step.
-
-## 3. Tests and measurement commands; acceptance bars
-
-Unit tests (no training):
-- `ode`: RK4 on `z' = -z`, 10 steps of `h = 0.1` vs `e^{-1}` within 1e-6
-  (compiled with `run_single`); `rollout` returns one state per step.
-- `model`: `rhs` of a `[2, 2]` (linear, no hidden activation) `Mlp` whose
-  column-major weight buffer holds `Aᵀ` equals `A z³` for a known `z` (1e-12):
-  `forward` computes `Wᵀ z³`, so this pins "cube, then network" and that the
-  weight is the transpose of the column-vector matrix. The example's
-  `[2, 50, 2]` net has 4 placeholders and matching initial values.
-- `data`: `velocity([1,0]) = [-0.1, -2]` and `velocity([0,1]) = [2, -0.1]`;
-  `generate` is deterministic and `SUBSTEPS = 50` vs `100` agree to < 1e-9
-  relative; `minibatch` places `z0` and every target at the documented index
-  (hand-computed for two starts, including the last valid start 989 whose last
-  target is sample 999), and `#[should_panic]` on an out-of-range start.
-- `plot`: bounds padding/empty/constant, and a PNG of non-zero size is written
-  to a temp dir (temp dir removed).
-- `sciml-kit`: the moved `step_decay_lr_has_three_stages` test.
-
-Commands (all from the worktree, kache verified healthy: 11961/11961 entries):
+## 2. Tests and commands, with acceptance bars
 
 ```
 cargo fmt --all --check
-cargo clippy -j 16 --workspace --all-targets --release -- -D warnings
-cargo test -j 16 --workspace --release
-cargo run -j 16 --release -p neural_ode -- --epochs 20 --plot /tmp/n12/short.png
-cargo run -j 16 --release -p kdv_pinn -- --epochs 20 --loss-png /tmp/n12/kdv.png
+cargo clippy --workspace --all-targets --release -- -D warnings     # no warnings
+cargo test --release --workspace                                    # all pass
+cargo run --locked --release -p pinn_gauss_newton -- --dim 1 --optimizer lm --epochs 40
+cargo run --locked --release -p pinn_gauss_newton -- --dim 1 --optimizer adam --epochs 2000
+cargo run --locked --release -p pinn_gauss_newton -- --dim 2 --optimizer lm --epochs 40
+cargo run --locked --release -p pinn_gauss_newton -- --dim 2 --optimizer adam --epochs 2000
 ```
 
-Measurement (serial CPU engine, `--release`, no plot unless stated):
+`--locked` mirrors `LOCKED=--locked` in `.github/workflows/checks.yml`.
 
-```
-time ./target/release/neural_ode --epochs 0                 # compile cost
-time ./target/release/neural_ode --epochs 100
-time ./target/release/neural_ode --epochs 20000             # seeds 42, 43, 44
-./target/release/neural_ode --epochs 20 --seed 42           # twice: identical final loss
-./target/release/neural_ode --epochs 20 --seed 43           # differs
-```
+Unit tests (the two the issue requires are marked ★):
 
-Acceptance bars:
+1. ★ `network::tests` — tiled initial values equal the plain ones; `forward`
+   agrees between layouts for the same θ (runtime).
+2. ★ `poisson::tests::batched_jacobian_matches_per_parameter_jvps` — small net
+   `[dim,2,2,1]` (P = 13 for 1-D, 15 for 2-D), `n_col = 5`, `n_bc = 2`; every
+   scalar parameter entry gets one `jvp` of the residual (`traced.rs:771`) with
+   a data-carrying `e_p` seed, and the `P` columns are compared with the
+   per-point `Jᵀ` from `grad_many`. Both `dim = 1` and `dim = 2`. Bar:
+   `max |Jᵀ_jvp − Jᵀ_batched| ≤ 1e-10 · max |J|` (both routes are exact up to
+   rounding).
+3. ★ `lm::tests::rho_accept_reject_table` — the ρ/λ table of §1.4 (accept at
+   ρ=1 → λ/3; ρ=0.5 → λ; ρ=0.1 → 2λ; ρ<0 → reject, 10λ; predicted ≤ 0 and NaN
+   → reject), plus clamping at `LAMBDA_MIN`/`LAMBDA_MAX`.
+4. `lm::tests::step_solves_the_damped_system` — synthetic `Jᵀ` `[P,N]` and `r`
+   from a host `A`, `P = 6`, `N = 10`, `λ = 0.5`: assert
+   `‖(AᵀA + λI)δ + Aᵀr‖ ≤ 1e-10 ‖Aᵀr‖` and `predicted > 0`; `λ = 0` gives the
+   undamped least-squares step.
+5. `lm::tests::cholesky_failure_is_reported_and_retryable` — rank-1 `J`, `λ = 0`
+   ⇒ either `Err` with `ErrorKind::NumericalFailure` or a rejected decision
+   (probed first; the test pins the observed behaviour), and the *same*
+   `Prepared` then runs successfully with `λ = 1e-2`. Bar: the retry succeeds
+   and returns a finite `δ`.
+6. `poisson::tests` — points lie in `[0,1]^dim`, the boundary set is on the
+   boundary, the exact solution vanishes there, RNG determinism.
+7. `plot::tests` — bounds helpers on empty/constant/NaN input; PNG write
+   produces a non-empty file (as `examples/neural-ode/src/plot/tests.rs`).
 
-1. fmt, clippy (`-D warnings`), tests: clean; short runs exit 0 and write the
-   PNGs.
-2. Training uses exactly one `value_and_grad` program with one `prepare` and one
-   `run` per epoch: exactly one `value_and_grad(` call in `src/main.rs` (outside
-   the tests), and the `for epoch` body contains no `compile`/`prepare` —
-   checked by reading the loop, with `grep -n "prepare(\|compile_many"
-   src/main.rs` showing only the setup calls.
-3. Compile (graph build + `compile_many` of loss + 4 gradients, 10 unrolled RK4
-   steps = 40 MLP evaluations) ≤ 5 s; per-epoch ≤ 15 ms; full 20k run ≤ 300 s.
-4. Full run, seed 42: trajectory relative L2 ≤ 5% (JAX prototype of the same
-   algorithm: 1.7% at 20k × batch 64; 43 → 7.9%, 44 → 47%). README reports the
-   three values, not only the default. If the Rust run is materially worse than
-   the prototype, re-check the loss/optimizer wiring before changing defaults.
-5. Same-seed runs print the identical final loss; a different seed differs.
-6. kdv's short run still prints `final loss after 20 epochs:` and the same
-   behaviour (only the import moved).
+Acceptance bars for the measurements (single-threaded `CpuEngine::serial()`,
+recorded with the thread count):
 
-## 4. Edge cases, compatibility, deliberate non-changes
-
-- Window bounds: `start` in `0..990`, `minibatch` asserts
-  `start + WINDOW_STEPS < N_SAMPLES`, so the last target is `t[999]`.
-- `--epochs 0`: the training program is still compiled, the loop is empty, the
-  loss stays `inf`; the evaluation still runs (the reference is independent of
-  training). No division by zero in the printed numbers.
-- `z³` stays in `[-6.5, 8]` on the reference trajectory (measured on the host),
-  so no overflow or `tanh` blow-up; `A z³` has components up to 16.
-- Eval chaining requires identical shapes each run ([1, 2]); the prepared
-  program is reused only with the same shape, dtype and layout.
-- AD input order: parameters first, then `z0`, then `targets`; AD seeds are
-  created last and are bound constants. No hand-maintained order table, no
-  `bind_order` dependence on the `#[doc(hidden)]` `input_key_index`.
-- Deliberately unchanged: `sciml-kit` model code (`Mlp`, Xavier init), the
-  other examples except kdv's schedule import, CI structure, tenferro versions
-  (no git/path dependency), the umbrella's `local_tangent` conventions.
-- **Continuous adjoint stretch: out of this PR**, as the issue schedules it as
-  a separate PR. It is not approximated or half-implemented here; the README
-  says so and names the host-loop/`vjp`-per-step shape it will take.
-
-## 5. Risks and rejected alternatives
-
-- **Risk: long-horizon error is seed-sensitive.** The training objective is
-  local (10 steps), while the reported metric is a 999-step rollout, so small
-  systematic window biases accumulate (JAX prototype: 1.7% / 7.9% / 47% for
-  seeds 42/43/44 at 20k). Mitigation: report the range and the metric in the
-  README, do not tune the metric or the window length. The default run (42)
-  fits; the figure uses it.
-- **Risk: JAX and tenferro optimizers differ in floating point.** Bars 4/5
-  compare against the prototype with tolerance, not equality; the Rust numbers
-  are what the README reports.
-- **Risk: compile cost of reverse mode over 40 unrolled MLP evaluations.**
-  Measured first (bar 3); expected far below 5 s given kdv's 5 ms fused program.
-  No fallback changes the design: if it exceeded the bar, the compile cost would
-  be reported and the graph kept as is (the issue asks for the unrolled graph).
-- **Risk: moving `step_decay_lr` touches kdv.** Mechanical move; kdv tests and
-  its short run are re-run (bar 6).
-- Rejected: **continuous adjoint in this PR** (separate PR per the issue; each
-  step's cotangent would have to be re-bound as a data-carrying leaf, i.e. one
-  fresh trace+compile per step, so its compile cost belongs in that PR's
-  report).
-- Rejected: a `NeuralOde` wrapper struct — `Mlp` plus a free `rhs` is the whole
-  model, and the test needs a smaller linear `Mlp` anyway.
-- Rejected: 10 per-step target placeholders — one `[B,2,10]` tensor keeps the
-  binder and the program inputs minimal; its layout is tested by hand.
-- Rejected: compiling the full 999-step rollout as one graph for evaluation —
-  it would make the compiled unit 100x larger than the training window and
-  changes nothing about the reported error. The host chaining keeps one small
-  program prepared once.
-- Rejected: MSE or a normalized loss — the issue specifies mean absolute error.
-- Rejected: copying `step_decay_lr` into the new example — the kit exists for
-  code two examples use.
-
-## 6. Review record
-
-Reviewer: `reviewer-glm` = `ollama-cloud/glm-5.3-flash:high` (read-only pi
-subagent), reviewed this plan before any code was written.
-
-**VERDICT: CHANGES** — addressed as follows.
-
-- IMPORTANT 1 (`Linear::forward` computes `Wᵀ x`, so a weight filled with `A`
-  gives `Aᵀ z³`; the §1.2 model claim and the `[2,2]` test as written could not
-  pass): **accepted and fixed**. §1.2 now states the convention with
-  `sciml-kit/src/nn.rs:39-46`, and the model test fills the column-major buffer
-  with `Aᵀ`.
-- MINOR 1 (`rand`/`plotters` are per-package, not workspace deps): accepted,
-  §2 wording fixed.
-- MINOR 2 (schedule is half / third quarter / last quarter, not quarters):
-  accepted, §1.3 fixed.
-- MINOR 3 (the moved doc comment would be stale): accepted, §2 now says the
-  module doc is rewritten.
-- MINOR 4 (eval chaining only covered by the full-run bar; the grep is
-  brittle): accepted. `main` now asserts the collected state count before the
-  metric, the last-valid-window mapping is a `data` test, and bar 2 is scoped to
-  the loop body instead of a bare `grep -c`.
-
-No design change followed from the review: all findings were wording or test
-coverage. The reviewer's APPROVE items (all §0 API claims, input order, eval
-program inputs, `Prepared` reuse, index formulas, kdv move, CI step) were each
-re-checked against the 0.11.0 sources in this session.
-
-## 7. Measurement record: the unrolled window does not compile (blocker)
-
-The implementation below meets the code/API decisions, and all 12 unit tests
-pass, but acceptance bar 3 (compile <= 5 s) and bar 4 (a full run) cannot be
-reached: `Runtime::prepare` on the 10-step window blows up inside
-tenferro-runtime 0.11.0. This section records what was measured, because the
-design as written in §1 is not implementable with the released compiler.
-
-### 7.1 Sweep (same binary, only `WINDOW_STEPS` changed, `--epochs 1`)
-
-| window | graph ops | result |
-|---|---|---|
-| 1 | 350 | 15.3 ms/epoch *including* prepare; trajectory written |
-| 2 | 542 | prepare 20.6 s (whole run 20.8 s) |
-| 3 | 1091 | OOM-killed after 92 s, max RSS 20,723,608 kB (SIGKILL 9) |
-| 10 | 2747 | no completion within 100 s; no PNG; exit 2 |
-
-Commands (from the worktree root, release profile):
-
-```
-cargo build -j 16 --release -p neural_ode
-./target/release/neural_ode --epochs 1          # window = N
-/usr/bin/time -v timeout 240 ./target/release/neural_ode --epochs 1
-```
-
-The forward-only evaluation program for the same 10 steps prepares in 5 ms and
-runs 100 windows in 0.08 s, so the cost is specific to the *AD* graph, not the
-window length as such.
-
-### 7.2 Where the cost is
-
-`callgrind` on the window-2 run (46.9e9 Ir): 98.7% of the instructions are in
-`Runtime::prepare` -> `stage_semantic_program` ->
-`compile_std_to_exec_with_effects`; the inclusive cost of `DimExpr::clone` is
-23.9e9 Ir and `Vec<DimExpr>::clone` alone 14.0e9 Ir, all driven by
-`infer_output_shapes` and `same_or_scalar_broadcast_shape`.
-
-A patched *copy* of tenferro-runtime 0.11.0 (in `/tmp/n12/tr`, never committed,
-used only for diagnosis) showed the expression shape. The compiler keeps two
-shape streams per slot: the executable one from concrete input shapes, and a
-parallel "analysis" one that `build_exec_staging` seeds with
-`InputDim { input_idx, axis }` for every program input
-(`tenferro-runtime-0.11.0/src/compiler/semantic_staging.rs:47`). The AD graph
-bakes concrete shapes into `BroadcastInDim`/`Reshape` (the `one_like` anchor of
-`tanh`, the cotangent broadcast of `reduce_sum`, and `Linear`'s
-`bias.reshape([1, out])`). `broadcast_dim` cannot prove a `Const` and an
-`InputDim` equal, so it emits `Max` and clones both subtrees:
-
-```
-Max(Max(InputDim { input_idx: 4, axis: 0 },
-        Max(... Max(InputDim { input_idx: 4, axis: 0 }, Const(64)), ...)),
-    Max(...))
-```
-
-Every sequential op adds another such layer, and because the two operands are
-distinct grown expressions the tree roughly doubles per RK4 step (939 nodes at
-window 2). The analysis stream is marked "best-effort" in the source
-(`compiler/mod.rs:296`) but is computed unconditionally, and it OOMs.
-
-Upstream `main` (local checkout `~/projects/tensor4all/tenferro-rs`, fa541ceb)
-still contains the same unconditional block, so no newer public release in
-reach of this worktree behaves differently.
-
-### 7.3 Workarounds tested and rejected
-
-- Symbolic inputs (`TraceContext::input_symbolic_shape`) instead of concrete
-  ones: fails at graph build, because `TracedTensor::scale_real` (used by the
-  RK4 combination and the loss normalisation) calls `concrete_shape`; error
-  `symbolic dimension in shape hint for tensor at rank 2`.
-- Batch 1 (so the concrete annotation is `Const(1)` and folds): still OOM
-  (killed after 70 s) — the feature axis `Const(50)` vs `InputDim` doubles the
-  same way.
-- `CompilerOptions { algebraic_layout_simplifier: false, dot_decomposer: false
-  }`: unchanged (>120 s at window 10); the cost is in shape staging, before
-  the optimizer.
-- Removing `stack` (per-step scalar loss): unchanged.
-- Replacing MAE with squared error: unchanged.
-- Removing `tanh` (identity activation): unchanged.
-
-### 7.4 Consequences and the two design options
-
-Contract bars 3-6 in §3 (compile <= 5 s, per-epoch <= 15 ms, 20k-epoch run,
-seed-42 accuracy) were therefore not measured; only the unit tests and the
-1-window run were. No PR is opened: the example's own default run OOMs.
-
-Options for a follow-up decision (neither implemented):
-
-1. **Per-step checkpointed VJP** (one program, one prepare, same 10-step
-   window and batch): trace *one* RK4 step with the incoming state and the
-   incoming cotangent as inputs/constants and a scalar `sum(lambda * z_next)`
-   as the loss, then run it 10 times forward and 10 times backward per epoch,
-   accumulating parameter gradients on the host. A 1-step graph prepares in
-   15 ms (§7.1), so all compile bars pass; this is the discrete adjoint by
-   checkpointing, not the continuous-adjoint stretch of the issue.
-2. **Upstream fix**: report the analysis-shape blow-up to tenferro and keep
-   this branch unpublished until a release makes the unrolled 10-step window
-   preparable; then §1 stands unchanged.
-
-## 8. Approved design change: checkpointed discrete adjoint
-
-The unrolled window cannot be prepared (§7), so the user approved replacing the
-single unrolled graph with a per-step checkpointed reverse pass. Batch 64, the
-10-step window, the MAE loss, the MLP `[2, 50, 2]`, the RK4 stepper, the
-optimizer and the evaluation program stay as planned. Only the training graph
-changes: one traced RK4-step graph, run 10 times forward and 10 times backward
-per epoch, with the cotangent re-bound as an input at every step.
-
-### 8.1 Mathematics
-
-Window `z_0 -> z_1 -> ... -> z_10`, loss `L = 1/(B*2*10) * sum_k |z_k - t_k|`.
-Reverse pass with a checkpointed state and an explicit cotangent:
-
-- carry `lambda = 0` before the first reverse step;
-- for `k = 10 .. 1`: `lambda += (1/(B*2*10)) * sign(z_k - t_k)` (the direct
-  loss term, added exactly once), then run the step VJP with
-  `(z_{k-1}, lambda)` to get `lambda_prev = dz_k/dz_{k-1}^T lambda` (the next
-  carried value) and add `dz_k/dtheta^T lambda` to the parameter gradient.
-
-Summing the 10 step VJPs is exactly the discrete adjoint of the unrolled loss
-(same arithmetic as §1's unrolled graph, up to floating-point summation order),
-so the §3 accuracy bars carry over.
-
-### 8.2 Graph and program
-
-One traced graph, `TraceContext`:
-
-| input | shape | role |
-|---|---|---|
-| 4 parameters | `[2,50]`, `[50]`, `[50,2]`, `[2]` | trained |
-| `z_prev` | `[64,2]` | checkpointed state |
-| `lambda` | `[64,2]` | cotangent (not differentiated) |
-
-`z_next = rk4_step(rhs, z_prev, H)` (the §1.1 stepper, generic over RHS),
-`spot = reduce_sum(lambda * z_next)`, and `value_and_grad` over the 4
-parameters **and** `z_prev`; the `z_prev` gradient is `lambda_prev`. Outputs of
-`compile_many`: `z_next` plus the 5 gradients (4 parameters + `z_prev`).
-`lambda` is a plain program input that is never passed to `value_and_grad`.
-
-One `prepare` before the first epoch; the same `Prepared` runs every step.
-Epoch flow: 10 forward runs with `lambda = 0` (collect `z_1..z_10`), then
-10 backward runs. The MAE cotangents are computed on the host (control), the
-arithmetic stays in the graph.
-
-### 8.3 Files and functions
-
-- `src/train.rs` (new): build the step graph; `window_loss_and_grad`, the
-  forward/backward loop returning the host loss, the accumulated gradient
-  vectors and the checkpointed states.
-- `src/main.rs`: build the training and evaluation graphs; epoch body calls
-  `train::window_loss_and_grad`; fix the evaluation buffer to column-major
-  (the current loop appends interleaved states while `Dataset::states` and the
-  plot are column-major); keep Adam/`step_decay_lr`, logging, timing prints and
-  the `--epochs/--seed/--plot` flags.
-- `src/train/tests.rs` (new): a finite-difference check of the real multistep
-  reverse loop over all 4 parameter tensors, and a zero-residual check
-  (`targets = predicted states` must give loss 0 and an all-zero gradient).
-- `src/ode.rs`: unchanged (`rk4_step`/`rollout`).
-- `src/data.rs`, `src/model.rs`, `src/plot.rs`, tests: unchanged.
-- `README.md` (example + root row): describe the checkpointed discrete adjoint
-  and report the measured compile and per-iteration times.
-- `WORKLOG.md`, this plan: record the change and the measurements.
-
-### 8.4 Acceptance bars (unchanged numbers, new run counts)
-
-1. `cargo fmt --all --check`, workspace clippy `-D warnings`, workspace tests.
-2. One traced training graph, one `value_and_grad`, one `compile_many`, one
-   `prepare`; no trace/compile/prepare inside the epoch loop; 20 runs/epoch.
-3. Graph build + `compile_many` + the first `prepare` together <= 5 s (the
-   staging cost lives in `prepare`, so it is part of the compile budget);
-   <= 15 ms/epoch; full 20k-epoch run <= 300 s.
-4. Seed 42 full run relL2 <= 5 %; README reports seeds 42/43/44.
-5. Same seed reproduces the final loss exactly; kdv short run unchanged.
-
-### 8.5 Risks
-
-- 20 program runs per epoch is 10x the launch count of the unrolled design;
-  the bars in 8.4 keep it honest, and §7's window-1 measurement (15 ms
-  including prepare) leaves headroom.
-- The host computes `sign(z_k - t_k)` in f64 from the same states the graph
-  produced, so the adjoint is exact for this loss, not an approximation. The
-  finite-difference test in `src/train/tests.rs` pins it.
-- The floating-point summation order differs from a single unrolled reverse
-  pass; the seed-42/43/44 bars are the check.
-- No tenferro change; the diagnosis and the upstream report are separate (§7).
-
-### 8.6 Measured results (final)
-
-Timing, AMD Ryzen AI MAX+ 395, single-threaded `CpuEngine`, seed 42:
-
-| quantity | value |
+| run | bar |
 | --- | --- |
-| graph build + `compile_many` | 0.001 s |
-| first `prepare` | 0.008 s |
-| training, 20 000 epochs | 151.3 s (7.57 ms/epoch) |
-| runs/epoch | 20 (10 forward, 10 reverse) |
+| 1-D LM (≤ 40 iterations) | relL2 ≤ 1e-4, wall time ≤ 60 s, no unhandled Cholesky error |
+| 1-D Adam (2000 epochs) | relL2 ≤ 5e-2 |
+| 2-D LM (≤ 40 iterations) | relL2 ≤ 1e-3 |
+| 2-D Adam (2000 epochs) | relL2 ≤ 1e-1 |
+| comparison | at equal wall time LM's relL2 is ≥ 10× smaller than Adam's |
 
-Bars 1, 2, 3, 5 passed (see WORKLOG for the commands). Bar 4 **did not pass
-for seed 42**: the window loss reaches its floor (`4.0e-4`) but the pointwise
-relative L2 of the chained 1000-step rollout is 31 %. Measured over six seeds
-with everything else fixed:
+The comparison is measured, not asserted: the LM run's wall time `T_lm` is read
+from its summary line, then the Adam run is repeated per dimension with the
+largest epoch count whose wall time stays within ±20 % of `T_lm`; the table
+reports that Adam run (epochs, wall time, relL2) next to the LM one, and the
+bar is applied to that pair. If no epoch count lands inside ±20 %, report the
+nearest one and the deviation — do not tune the network.
 
-| seed | final loss | relL2 |
-| --- | --- | --- |
-| 42 | 4.0e-4 | 31 % |
-| 43 | 2.6e-4 | 15 % |
-| 44 | 3.2e-4 | 46 % |
-| 45 | 5.7e-4 | 3.8 % |
-| 46 | 3.3e-4 | 17 % |
-| 47 | 6.6e-4 | 15 % |
+If a bar is missed, the measured numbers and the diagnosis go into the README
+and the worklog; nothing is tuned silently to hit a bar.
 
-Diagnosis: the per-window MAE is at its floor for every seed (a trained model
-predicts a reference-started 10-step window to 6e-5..3e-2 depending on the
-window; the mean over random windows is 4e-4), but the eval feeds the model's
-own state back in, so the long-horizon error is a phase drift whose sign and
-size depend on the field the optimizer lands in. 50 000 epochs with seed 42
-give 31.6 % with the same loss floor, so this is a property of the 10-step
-objective, not undertraining. The prototype's 1.7 % (§2) was one draw of the
-same heavy-tailed distribution, not a reproducible target; the bar was set
-from it and is not met by the default seed. The README now reports all six
-seeds and the drift; `--seed 45` shows the 3.8 % trajectory. No seed is
-selectively promoted to the default.
+## 3. Edge cases, compatibility, deliberate non-changes
 
-Upstream report filed as tensor4all/tenferro-rs#2643 (analysis-shape DimExpr
-blow-up; the unrolled graph would return once that is fixed).
+- `--epochs 0`: the programs are prepared before the loop, so a zero-length run
+  still builds, prepares and evaluates (the #12 review finding, not repeated).
+- Rank-0 `λ` placeholder: built with `input_concrete_shape(DType::F64, &[])`;
+  the first test that runs the program pins that a rank-0 input is bindable. If
+  it is not, use `[1]` + `broadcast_in_dim([P], [0])` (one-line change).
+- `n_col`, `n_bc`, sizes are compile-time constants of the run (shapes are
+  static in a traced graph); one `Prepared` per program per run.
+- Points are fixed per run: the residual vector, `J` and the ρ comparison are
+  consistent; Adam uses the same points, so the comparison is on one objective.
+- `f64` only (convention 8 allows dtype pass-through but tenferro 0.11 has no
+  public `Tensor::cast`, and every other example is `f64`).
+- Not changed: `sciml-kit`, the other four examples, `ci.yml`,
+  `upstream-main.yml` (it calls `checks.yml`), the workspace `Cargo.toml`
+  (`tenferro-linalg` is already a workspace dependency).
+- Not done: no new tenferro API or tenferro-rs issue (both gaps are already
+  tracked as #2419 and #2642); no `lstsq` comparison variant (issue's optional
+  suggestion, not in its Done-when list); no nonlinear PINN (#9).
 
-Figure note: the loss trace was plotted as block means over 50 epochs; a
-per-epoch trace of a random minibatch is not readable.
+## 4. Risks and the rejected alternative
 
-Post-implementation review (`gpt-6.1-sol`, read-only, diff vs `origin/main`):
-**VERDICT: CHANGES**, all findings addressed before commit.
+Risks, in order:
 
-- IMPORTANT: `prepare` was called from inside the epoch loop behind an
-  `Option` guard (so `--epochs 0` never prepared it). Hoisted before the loop,
-  binding a fixed `[64, 2]` batch of first windows so the window RNG is not
-  advanced; the `Option` is gone.
-- MINOR: the README overstated the window loss as bounding every window (it is
-  the last sampled minibatch); the continuous-adjoint note claimed a
-  constant-leaf re-trace that contradicts the checkpointed program (the
-  cotangent is a program input), so the claim was deleted; the finite-difference
-  test comment called the check exact although the window is nonlinear; the
-  model doc claimed the output vanishes cubically although the biases are
-  trainable; the layout table said two-panel for a three-panel figure; the plot
-  doc said one loss value per epoch although the caller passes block means.
-  All six corrected.
+1. **Cholesky + solve inside a traced graph at P ≈ 10³** has no precedent in
+   this repo. Probed first with a tiny `--epochs 1` run before the rest of the
+   loop is written; also covered by tests 4 and 5.
+3. **Accuracy**: a weakly enforced boundary (2048 PDE rows vs 2 BC rows in 1-D)
+   can leave a constant offset; handled by the per-group `1/sqrt(n)` scaling
+   (§1.3) and checked by the relL2 bar.
+4. **faer's Cholesky on a semidefinite matrix** may return `Ok` with NaNs
+   instead of an error. `decide` treats NaN as a reject, and the loop raises λ
+   until the cap, so the run terminates with a diagnosis either way.
+2. **LM cost** `P²N + P³/3` ≈ 2.9·10⁹ + 4.1·10⁸ flops per iteration at
+   `P = 1153, N = 2050` (1-D) — ~0.3–0.5 s single-threaded. If that exceeds the
+   wall-time bar, the width or `n_col` is reduced (2 hidden layers of width 24,
+   `n_col = 1024`, which gives `P = 697`/`721`) and the change is reported in the
+   README and worklog, not hidden.
+5. **Prepare-time cost and memory.** `WORKLOG.md` in this repo records that a
+   long unrolled 0.11.0 reverse-mode graph was OOM-killed at 20.7 GB RSS during
+   prepare, which `--epochs 2` does not mitigate. This graph is *not* unrolled
+   over points (the point axis is a tensor axis), so its node count does not
+   grow with N, but the probe in risk 1 measures prepare time and peak RSS of
+   the **default** graph (`/usr/bin/time -v`) before the loop is written, and
+   the numbers go into the worklog. If the default graph does not prepare inside
+   a few seconds and ~1 GB, the size fallback of risk 2 applies.
 
+Rejected alternative: **extend `sciml-kit::nn::Mlp` with a per-point mode** and
+use it for both optimizers. `Mlp` is points-first by construction, so the
+per-point path would need a transpose per layer or a second layout inside the
+shared crate — a change to a crate three other examples depend on, for one
+consumer, and it still would not give the Adam/LM pair a single θ layout (the
+comparison would have to transpose between layouts to share initial values).
+The local `Model` keeps one model, one layout, one θ for both optimizers; if #9
+needs the same model it moves into `sciml-kit` mechanically.
+
+Second rejected alternative: **host-side Cauchy-point line search** with a
+per-trial program run instead of the in-graph candidate residual. It needs two
+runs and two read-backs per iteration, against convention 3, for no accuracy
+gain on a least-squares problem where the LM ρ test is the standard acceptance
+rule.
+
+Third: **`lstsq` on `[J; sqrt(λ)I]`** as the primary solve (issue's alternative)
+— `lstsq` is a composite built from QR/SVD and, with `J` `[N,P]` for
+`N = 2176 > P`, is ~10× the flops of the normal equations for a problem that
+does not need the extra rank robustness. Kept out; named in the README.
+
+## 5. Open item parked for the maintainer
+
+The issue's Done-when list also asks for `baselines/jax_poisson.py` with its
+numbers in the table. This machine has no JAX and installing one is an
+environment change outside this task's scope, so an unrunnable baseline script
+would be untested code. Parked: the README states the baseline is not included
+and why, and the PR body asks whether to add it (and on which machine).
+
+## 7. Post-review refinement (recorded before implementing)
+
+The reviewed plan used two point groups (`x_col`, `x_bc`) with two per-point
+parameter sets. While pinning the input shapes it became clear that one
+`[dim, n_col+n_bc]` point placeholder with two static column slices of the
+residual replaces both groups: one parameter set, one `grad_many` list, one
+tile copy of the same total size, and the same residual for both optimizers.
+Nothing in the accepted Jacobian contract, the copy cost, the ρ test or the API
+claims changes; §1.3/§1.6 above are the updated text.
+
+## 8. Review
+
+Reviewer: `ollama-cloud/glm-5.3-flash:high` (pi agent `reviewer-glm`,
+read-only), plan reviewed before any code was written.
+**VERDICT: APPROVE** — no BLOCKER; 2 IMPORTANT and 4 MINOR findings, all
+addressed in this revision:
+
+- IMPORTANT (defaults unpinned): the default `sizes`/`n_col`/`n_bc`/`λ₀` and the
+  resulting `P`/`N` are now a pinned table in §1.6, and the cost fallback in §4
+  names the sizes it would produce.
+- IMPORTANT (prepare-time precedent): risk 5 now cites the repo's own 20.7 GB
+  prepare-time OOM record and makes prepare time and peak RSS part of the first
+  probe.
+- MINOR (citation drift): `Error::kind()` → `error.rs:783`, Xavier →
+  `nn.rs:104-119`, per-group scaling → `loss.rs:33-53`.
+- MINOR (`--locked`): added to every run command.
+- MINOR ("comparable wall time" undefined): replaced by the explicit
+  equal-wall-time protocol in §2.
+- MINOR (plot helper duplication): accepted as-is for one figure; a third copy
+  would move them into `sciml-kit`.
+
+## 9. Measured outcome (after implementing)
+
+Single-threaded `CpuEngine::serial()`, default sizes and seed, `--locked`,
+release profile:
+
+| run | steps | wall | loss | relL2 | bar | |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1-D LM | 150 | 24.10 s | 5.745e-08 | 1.922e-05 | ≤1e-4, ≤60 s | met |
+| 1-D Adam | 2000 | 113.01 s | 5.384e-04 | 1.533e-03 | ≤5e-2 | met |
+| 1-D Adam at equal wall time | 430 | 25.23 s | 4.570e-01 | 5.423e-01 | LM ≥10x smaller | met (2.8e4x) |
+| 2-D LM | 150 | 35.35 s | 1.081e-06 | 5.772e-04 | ≤1e-3 | met |
+| 2-D Adam | 2000 | 218.18 s | 1.817e-02 | 1.373e-01 | ≤1e-1 | **missed** |
+| 2-D Adam at equal wall time | 320 | 35.72 s | 3.280e+00 | 1.807e+00 | LM ≥10x smaller | met (3.1e3x) |
+
+The equal-wall-time rows are the largest Adam epoch count whose wall time stays
+within ±20 % of the LM run (24.10 s against 25.23 s, +4.7 %; 35.35 s against
+35.72 s, +1.0 %).
+
+The default LM budget was raised from the 40 iterations pinned in §1.6 to 150:
+two dimensions need them (at 40 iterations 2-D LM is at `relL2` 9.76e-02 and at
+150 at 5.77e-04), and the 1-D run pays 18 s for a budget it does not need.
+
+The one missed bar is 2-D Adam, and it is a rate, not a budget: 1.373e-01 after
+2000 epochs and 1.0239e-01 after 4000 (449 s), with its own loss falling only
+from 1.8e-02 to 5.3e-03 over those epochs. Nothing was tuned to close it, per
+§2; the README and the worklog carry both numbers.
+
+§6 risk 5 (prepare-time memory) did not materialise: the largest run peaks at
+294 MB (1-D LM 150) and 338 MB (2-D LM 150), and `prepare` of the four programs
+takes 0.003 s.
+
+The committed figure is `examples/pinn-gauss-newton/loss.png` (1-D, both
+optimizers, from `--optimizer both --plot loss.png`). The repository's
+`.gitignore` lists `*.png`, so it is added with `git add -f`, which is how
+`neural_ode.png` and `deeponet.png` are tracked as well.
+
+## 10. Where the implementation moved past §1
+
+§1.6 describes the design as reviewed (candidate parameters and the damped solve
+in one graph, eight declared inputs, 40 LM iterations). The shipped code differs
+in five places, all recorded in `WORKLOG.md` "Deviations", in §7 and in §9: the
+candidate residual is its own program (`UnsupportedAdRule` on `jvp` across the
+linalg op), the candidate parameters are stepped on the host, the inputs are
+bound by key with the AD inputs appended in program order, the point set is one
+placeholder with static column slices instead of two groups, and the default LM
+budget is 150 iterations because two dimensions need it.

@@ -57,6 +57,12 @@ jobs:
             --plot outputs/neural-ode.png
           cargo run $LOCKED --release -p deeponet -- --epochs 100 \
             --plot outputs/deeponet.png
+          cargo run $LOCKED --release -p pinn_gauss_newton -- --dim 1 --optimizer lm \
+            --epochs 5 --plot outputs/pinn-gauss-newton.png
+          cargo run $LOCKED --release -p pinn_gauss_newton -- --dim 2 --optimizer lm \
+            --epochs 3
+          cargo run $LOCKED --release -p pinn_gauss_newton -- --dim 2 --optimizer adam \
+            --epochs 5
           cargo run $LOCKED --release -p nqs_rbm -- --system ising-chain --size 8 \
             --steps 100 --samples 256 --validation-sweeps 256 --exact \
             --output-dir outputs/nqs-ising-chain \
