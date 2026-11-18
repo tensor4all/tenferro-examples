@@ -11,6 +11,7 @@ built against the tenferro crates released on crates.io.
 | [`pinn-gauss-newton`](examples/pinn-gauss-newton) | Compare Levenberg-Marquardt with Adam on a Poisson physics-informed network, using a batched reverse-pass Jacobian | traced autodiff (`jvp`, `grad_many`, `value_and_grad`), `tenferro-linalg` `cholesky` plus two triangular solves inside the graph, CPU runtime | @shinaoka |
 | [`nonlinear-pinn`](examples/nonlinear-pinn) | Train PINNs for viscous Burgers and Allen-Cahn with Adam and with Adam then L-BFGS, against a pseudo-spectral reference | traced autodiff (nested `jvp` for `u_t`, `u_x`, `u_xx`; `value_and_grad`), one compiled program for every Adam step and line-search trial, `tenferro-fft` (`rfft_with`/`irfft_with` with a reused `FftExecutor`) for the reference, CPU runtime | @SamuelBadr |
 | [`nqs-rbm`](examples/nqs-rbm) | Find spin-model ground states with a neural-network quantum state (Carleo and Troyer) | eager autodiff (`backward`), typed-tensor `matmul`, `tenferro-linalg` `solve` and `eigh` | @MartinMikkelsen |
+| [`ipt-dmft`](examples/ipt-dmft) | Find the coexistence region of the Mott transition with DMFT and the IPT impurity solver | `tenferro-fft` `fft`/`ifft` through a reused `FftExecutor`, element-wise `CoreOps` on complex tensors | @frankebel |
 
 `Implemented by` names the PR author, or the initial-commit author for `kdv-pinn`; AI assistance is not separately attributed.
 

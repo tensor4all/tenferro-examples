@@ -470,6 +470,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipt_dmft"
+version = "0.1.0"
+dependencies = [
+ "plotters",
+ "tenferro-cpu",
+ "tenferro-fft",
+ "tenferro-runtime",
+ "tenferro-tensor",
+]
+
+[[package]]
 name = "jpeg-decoder"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
