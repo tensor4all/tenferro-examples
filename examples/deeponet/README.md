@@ -60,8 +60,8 @@ $$
 
 The field is sampled on a 397-point uniform *fine grid* on $[0,1]$. The host
 sampler factorizes the covariance matrix by **Cholesky**,
-$K + 10^{-10} I = L L^\top$, using `TensorLinalgExt::cholesky` from
-`tenferro-linalg` 0.11.0 on a `CpuEngine`, then draws $u = L z$ with standard
+$K + 10^{-10} I = L L^\top$, using `LinalgOps::cholesky` from
+`tenferro-linalg` 0.12.0 on a `CpuEngine`, then draws $u = L z$ with standard
 normal $z$. The $10^{-10}$ diagonal jitter is needed because the smooth RBF
 covariance is numerically singular in `f64`; it is far below the unit kernel
 variance, so it does not change the distribution in any visible way. The
@@ -176,11 +176,11 @@ are $y \in [0,1]$ and each row is scaled to its own data range.
 
 ## tenferro notes
 
-The example uses only public 0.11.0 APIs. Two surfaces are worth naming:
+The example uses only public 0.12.0 APIs. Two surfaces are worth naming:
 
-- **Host Cholesky.** `TensorLinalgExt::cholesky` on a host `Tensor` is the
-  public 0.11 path for the GRF factorization; the traced
-  `TraceContextLinalgExt` would put the same operation in the graph, but the
+- **Host Cholesky.** `LinalgOps::cholesky` on a host `Tensor` is the
+  public 0.12 path for the GRF factorization; the traced
+  `TracedLinalgOps` would put the same operation in the graph, but the
   data is generated once before training and is not part of the loss.
 - **No explicit multi-output input order.** `compile_many` consumes the trace
   input order, and `CompiledGraph::input_keys`/`input_key_index` are

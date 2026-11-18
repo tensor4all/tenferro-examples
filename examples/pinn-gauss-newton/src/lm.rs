@@ -7,7 +7,7 @@
 //! applied to `sum(r)`, which is upstream of the Cholesky, and `lambda` is an
 //! ordinary program input.
 
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::{MatOp, TracedLinalgOps, TriangularSolveOptions};
 use tenferro_runtime::{Error, Result, TracedTensor};
 use tenferro_tensor::{ErrorKind, Tensor};
 
@@ -47,10 +47,9 @@ pub(crate) fn solve_step(
     let identity = lambda.broadcast_in_dim(&[p], &[])?.embed_diag(0, 1)?;
     // A = L L^T, so (A + lambda I)^-1 b is two triangular solves.
     let factor = normal.add(&identity)?.cholesky()?;
-    let step = factor.triangular_solve(&gradient, true, true, false, false)?;
-    let delta = factor
-        .triangular_solve(&step, true, true, true, false)?
-        .neg()?;
+    let step = factor.triangular_solve(&gradient)?;
+    let transpose = TriangularSolveOptions::default().op(MatOp::Transpose);
+    let delta = factor.triangular_solve_with(&step, &transpose)?.neg()?;
     let linear = j.matmul(&delta)?.add(r)?;
     let predicted = r
         .reduce_sum_squares(None)?
