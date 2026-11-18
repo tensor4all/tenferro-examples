@@ -258,6 +258,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     let adam_seconds = training.elapsed().as_secs_f64();
+    // each step evaluated the loss before its update: one more run gives the loss of
+    // the final parameters
+    if adam_steps > 0 {
+        last_loss = evaluate(&params)?[0].as_slice::<f64>()?[0];
+    }
     println!("adam done: loss {last_loss:.4e}, {adam_seconds:.1} s");
 
     // L-BFGS on the flat parameter vector.

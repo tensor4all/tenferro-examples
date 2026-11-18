@@ -109,7 +109,7 @@ settings (its own random draws for the points and the initialization).
 
 | problem | optimizer | steps | final loss | **relative $L^2$ error** | JAX + Optax error |
 | --- | --- | --- | --- | --- | --- |
-| Burgers | `adam` | 20 000 Adam | `4.99e-5` | **`1.18e-2`** | `3.98e-3` |
+| Burgers | `adam` | 20 000 Adam | `5.18e-5` | **`1.18e-2`** | `3.98e-3` |
 | Burgers | `adam-lbfgs` | 10 000 Adam + 10 000 L-BFGS | `3.53e-7` | **`3.93e-4`** | `2.09e-4` |
 | Allen-Cahn | `adam` | 20 000 Adam | `5.67e-3` | **`5.10e-1`** | `5.13e-1` |
 | Allen-Cahn | `adam-lbfgs` | 10 000 Adam + 10 000 L-BFGS | `7.91e-6` | **`3.26e-2`** | `2.73e-2` |
