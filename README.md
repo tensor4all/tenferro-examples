@@ -10,6 +10,7 @@ built against the tenferro crates released on crates.io.
 | [`deeponet`](examples/deeponet) | Learn the antiderivative operator with a DeepONet | traced autodiff (`value_and_grad`), one compiled graph per epoch, host `tenferro-linalg` `cholesky` for the random-field data, CPU runtime |
 | [`pinn-gauss-newton`](examples/pinn-gauss-newton) | Compare Levenberg-Marquardt with Adam on a Poisson physics-informed network, using a batched reverse-pass Jacobian | traced autodiff (`jvp`, `grad_many`, `value_and_grad`), `tenferro-linalg` `cholesky` plus two triangular solves inside the graph, CPU runtime |
 | [`nqs-rbm`](examples/nqs-rbm) | Find spin-model ground states with a neural-network quantum state (Carleo and Troyer) | eager autodiff (`backward`), typed-tensor `matmul`, `tenferro-linalg` `solve` and `eigh` |
+| [`ipt-dmft`](examples/ipt-dmft) | Find the coexistence region of the Mott transition with DMFT and the IPT impurity solver | `tenferro-fft` `fft`/`ifft` through a reused `FftExecutor`, element-wise `CoreOps` on complex tensors |
 
 ## Running an example
 

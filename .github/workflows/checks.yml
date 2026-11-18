@@ -73,6 +73,8 @@ jobs:
           cargo run $LOCKED --release -p nqs_rbm -- --system heisenberg-square --size 4 \
             --alpha 2 --steps 20 --samples 128 --validation-sweeps 128 \
             --filters-png outputs/nqs-heisenberg-square-filters.png
+          cargo run $LOCKED --release -p ipt_dmft -- --n-matsubara 512 --iterations 500 \
+            --plot outputs/ipt-dmft.png
 
       - uses: actions/upload-artifact@v7
         with:
