@@ -241,5 +241,166 @@ impl AdamScalar for Complex64 {
     }
 }
 
+/// Limited-memory BFGS over a flat `f64` parameter vector, on the host.
+///
+/// The direction comes from the two-loop recursion over the last `memory`
+/// curvature pairs, scaled by `s·y / y·y` of the newest pair (Nocedal and
+/// Wright, *Numerical Optimization*, Algorithms 7.4 and 7.5). The step length
+/// comes from a backtracking line search on the Armijo condition, so each trial
+/// is one evaluation of the loss and its gradient, typically one run of a
+/// compiled `value_and_grad` program. A pair with `s·y <= 0`, which Armijo
+/// alone does not exclude, is not stored, which keeps every direction a descent
+/// direction.
+///
+/// shortcut: `f64` parameters and a backtracking (not strong Wolfe) search; add
+/// either when an example needs it.
+pub struct Lbfgs {
+    memory: usize,
+    s: std::collections::VecDeque<Vec<f64>>,
+    y: std::collections::VecDeque<Vec<f64>>,
+}
+
+/// Outcome of one [`Lbfgs::step`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LbfgsStep {
+    /// The loss decreased; `evaluations` loss/gradient evaluations were used.
+    Accepted { evaluations: usize },
+    /// No trial step met the Armijo condition; the iterate is unchanged.
+    LineSearchFailed { evaluations: usize },
+}
+
+impl Lbfgs {
+    /// Armijo sufficient-decrease constant.
+    const C1: f64 = 1e-4;
+    /// Trial steps per line search, halving from 1.
+    const MAX_TRIALS: usize = 30;
+
+    /// Create an optimizer that keeps `memory` curvature pairs.
+    pub fn new(memory: usize) -> Self {
+        assert!(memory > 0, "L-BFGS needs at least one curvature pair");
+        Self {
+            memory,
+            s: Default::default(),
+            y: Default::default(),
+        }
+    }
+
+    /// The search direction `-H g` for gradient `grad`.
+    ///
+    /// Without curvature pairs it is the steepest descent direction scaled to
+    /// unit length, so the first trial step has length 1.
+    pub fn direction(&self, grad: &[f64]) -> Vec<f64> {
+        let mut q = grad.to_vec();
+        if self.s.is_empty() {
+            let norm = dot(grad, grad).sqrt().max(f64::MIN_POSITIVE);
+            return q.iter().map(|g| -g / norm).collect();
+        }
+        let rho: Vec<f64> = self
+            .s
+            .iter()
+            .zip(&self.y)
+            .map(|(s, y)| 1.0 / dot(s, y))
+            .collect();
+        let mut alpha = vec![0.0; self.s.len()];
+        for i in (0..self.s.len()).rev() {
+            alpha[i] = rho[i] * dot(&self.s[i], &q);
+            axpy(-alpha[i], &self.y[i], &mut q);
+        }
+        let (s, y) = (self.s.back().unwrap(), self.y.back().unwrap());
+        let gamma = dot(s, y) / dot(y, y);
+        q.iter_mut().for_each(|v| *v *= gamma);
+        for i in 0..self.s.len() {
+            let beta = rho[i] * dot(&self.y[i], &q);
+            axpy(alpha[i] - beta, &self.s[i], &mut q);
+        }
+        q.iter_mut().for_each(|v| *v = -*v);
+        q
+    }
+
+    /// One iteration from `x` with loss `f` and gradient `g`, all updated in
+    /// place when a step is accepted. `eval` returns the loss and gradient at a
+    /// trial point.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the first error of `eval`; the iterate is then unchanged.
+    pub fn step<E>(
+        &mut self,
+        x: &mut Vec<f64>,
+        f: &mut f64,
+        g: &mut Vec<f64>,
+        mut eval: impl FnMut(&[f64]) -> Result<(f64, Vec<f64>), E>,
+    ) -> Result<LbfgsStep, E> {
+        // Every stored pair has `s·y > 0`, so the implied inverse Hessian is
+        // positive definite and `d` is a descent direction: no restart is needed.
+        let d = self.direction(g);
+        let slope = dot(g, &d);
+        let mut step = 1.0;
+        for trial in 1..=Self::MAX_TRIALS {
+            let candidate: Vec<f64> = x.iter().zip(&d).map(|(x, d)| x + step * d).collect();
+            let (f_new, g_new) = eval(&candidate)?;
+            if f_new.is_finite() && f_new <= *f + Self::C1 * step * slope {
+                let s: Vec<f64> = d.iter().map(|d| step * d).collect();
+                let y: Vec<f64> = g_new.iter().zip(g.iter()).map(|(a, b)| a - b).collect();
+                if dot(&s, &y) > 0.0 {
+                    if self.s.len() == self.memory {
+                        self.s.pop_front();
+                        self.y.pop_front();
+                    }
+                    self.s.push_back(s);
+                    self.y.push_back(y);
+                }
+                *x = candidate;
+                *f = f_new;
+                *g = g_new;
+                return Ok(LbfgsStep::Accepted { evaluations: trial });
+            }
+            step *= 0.5;
+        }
+        Ok(LbfgsStep::LineSearchFailed {
+            evaluations: Self::MAX_TRIALS,
+        })
+    }
+}
+
+fn dot(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b).map(|(a, b)| a * b).sum()
+}
+
+fn axpy(alpha: f64, x: &[f64], y: &mut [f64]) {
+    y.iter_mut().zip(x).for_each(|(y, x)| *y += alpha * x);
+}
+
+/// Copy `f64` parameter tensors into one flat vector, in parameter order.
+///
+/// # Panics
+///
+/// If a tensor is not `f64`.
+pub fn flatten(params: &[Tensor]) -> Vec<f64> {
+    params
+        .iter()
+        .flat_map(|p| p.as_slice::<f64>().expect("f64 parameter").iter().copied())
+        .collect()
+}
+
+/// Write a flat vector back into `f64` parameter tensors, in parameter order.
+///
+/// # Panics
+///
+/// If a tensor is not `f64` or the lengths do not add up.
+pub fn unflatten(flat: &[f64], params: &mut [Tensor]) {
+    let mut offset = 0;
+    for p in params.iter_mut() {
+        let data = p.as_slice_mut::<f64>().expect("f64 parameter");
+        data.copy_from_slice(&flat[offset..offset + data.len()]);
+        offset += data.len();
+    }
+    assert_eq!(
+        offset,
+        flat.len(),
+        "flat vector length matches the parameters"
+    );
+}
+
 #[cfg(test)]
 mod tests;

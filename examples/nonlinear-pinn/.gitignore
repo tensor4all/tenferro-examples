@@ -1,0 +1,5 @@
+# Generated artifacts
+*.png
+!burgers.png
+!allen-cahn.png
+runs/

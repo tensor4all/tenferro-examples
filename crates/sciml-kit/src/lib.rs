@@ -9,7 +9,7 @@
 //! | --- | --- | --- |
 //! | [`func`] | the ordered parameter set a model is built from | `tenferro-func` |
 //! | [`nn`] | `Linear`, `Mlp`, Xavier initialization | `tenferro-nn` |
-//! | [`optim`] | `Sgd`, `Adam` | `tenferro-optim` |
+//! | [`optim`] | `Sgd`, `Adam`, `Lbfgs` | `tenferro-optim` |
 //!
 //! Nothing here wraps a tenferro call: compiling, preparing and running stay
 //! the plain `GraphCompiler` / `Runtime` calls in each example.

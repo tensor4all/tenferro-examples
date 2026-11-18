@@ -1,0 +1,21 @@
+[package]
+name = "nonlinear_pinn"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "PINNs for the Burgers and Allen-Cahn equations, trained with Adam and with Adam then L-BFGS"
+
+[dependencies]
+sciml-kit.workspace = true
+tenferro-ad.workspace = true
+tenferro-cpu.workspace = true
+tenferro-fft.workspace = true
+tenferro-runtime.workspace = true
+tenferro-tensor.workspace = true
+plotters = { version = "0.3", default-features = false, features = [
+    "bitmap_backend",
+    "bitmap_encoder",
+    "line_series",
+] }
+rand = "0.8"
