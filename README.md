@@ -3,14 +3,16 @@
 Runnable examples for [tenferro-rs](https://github.com/tensor4all/tenferro-rs),
 built against the tenferro crates released on crates.io.
 
-| Example | What it shows | tenferro features |
-| --- | --- | --- |
-| [`kdv-pinn`](examples/kdv-pinn) | Train a physics-informed neural network for the Korteweg-de Vries equation | traced autodiff (`jvp`, `value_and_grad`), one compiled graph per epoch, CPU runtime |
-| [`neural-ode`](examples/neural-ode) | Fit a 2-D spiral ODE with a checkpointed discrete adjoint through an RK4 solver | traced autodiff (`value_and_grad`) through a 10-step solver, one compiled graph per epoch, CPU runtime |
-| [`deeponet`](examples/deeponet) | Learn the antiderivative operator with a DeepONet | traced autodiff (`value_and_grad`), one compiled graph per epoch, host `TensorLinalgExt::cholesky` for the random-field data, CPU runtime |
-| [`pinn-gauss-newton`](examples/pinn-gauss-newton) | Compare Levenberg-Marquardt with Adam on a Poisson physics-informed network, using a batched reverse-pass Jacobian | traced autodiff (`jvp`, `grad_many`, `value_and_grad`), `tenferro-linalg` `cholesky` plus two triangular solves inside the graph, CPU runtime |
-| [`nonlinear-pinn`](examples/nonlinear-pinn) | Train PINNs for viscous Burgers and Allen-Cahn with Adam and with Adam then L-BFGS, against a pseudo-spectral reference | traced autodiff (nested `jvp` for `u_t`, `u_x`, `u_xx`; `value_and_grad`), one compiled program for every Adam step and line-search trial, `tenferro-fft` (`rfft`/`irfft` with a reused `FftExecutor`) for the reference, CPU runtime |
-| [`nqs-rbm`](examples/nqs-rbm) | Find spin-model ground states with a neural-network quantum state (Carleo and Troyer) | eager autodiff (`backward`), typed-tensor `matmul`, `tenferro-linalg` `solve` and `eigh` |
+| Example | What it shows | tenferro features | Implemented by |
+| --- | --- | --- | --- |
+| [`kdv-pinn`](examples/kdv-pinn) | Train a physics-informed neural network for the Korteweg-de Vries equation | traced autodiff (`jvp`, `value_and_grad`), one compiled graph per epoch, CPU runtime | @shinaoka |
+| [`neural-ode`](examples/neural-ode) | Fit a 2-D spiral ODE with a checkpointed discrete adjoint through an RK4 solver | traced autodiff (`value_and_grad`) through a 10-step solver, one compiled graph per epoch, CPU runtime | @shinaoka |
+| [`deeponet`](examples/deeponet) | Learn the antiderivative operator with a DeepONet | traced autodiff (`value_and_grad`), one compiled graph per epoch, host `TensorLinalgExt::cholesky` for the random-field data, CPU runtime | @shinaoka |
+| [`pinn-gauss-newton`](examples/pinn-gauss-newton) | Compare Levenberg-Marquardt with Adam on a Poisson physics-informed network, using a batched reverse-pass Jacobian | traced autodiff (`jvp`, `grad_many`, `value_and_grad`), `tenferro-linalg` `cholesky` plus two triangular solves inside the graph, CPU runtime | @shinaoka |
+| [`nonlinear-pinn`](examples/nonlinear-pinn) | Train PINNs for viscous Burgers and Allen-Cahn with Adam and with Adam then L-BFGS, against a pseudo-spectral reference | traced autodiff (nested `jvp` for `u_t`, `u_x`, `u_xx`; `value_and_grad`), one compiled program for every Adam step and line-search trial, `tenferro-fft` (`rfft`/`irfft` with a reused `FftExecutor`) for the reference, CPU runtime | @SamuelBadr |
+| [`nqs-rbm`](examples/nqs-rbm) | Find spin-model ground states with a neural-network quantum state (Carleo and Troyer) | eager autodiff (`backward`), typed-tensor `matmul`, `tenferro-linalg` `solve` and `eigh` | @MartinMikkelsen |
+
+`Implemented by` names the PR author, or the initial-commit author for `kdv-pinn`; AI assistance is not separately attributed.
 
 ## Running an example
 
