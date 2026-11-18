@@ -249,7 +249,8 @@ impl AdamScalar for Complex64 {
 /// comes from a backtracking line search on the Armijo condition, so each trial
 /// is one evaluation of the loss and its gradient, typically one run of a
 /// compiled `value_and_grad` program. A pair with `s·y <= 0`, which Armijo
-/// alone does not exclude, is not stored.
+/// alone does not exclude, is not stored, which keeps every direction a descent
+/// direction.
 ///
 /// shortcut: `f64` parameters and a backtracking (not strong Wolfe) search; add
 /// either when an example needs it.
@@ -330,15 +331,10 @@ impl Lbfgs {
         g: &mut Vec<f64>,
         mut eval: impl FnMut(&[f64]) -> Result<(f64, Vec<f64>), E>,
     ) -> Result<LbfgsStep, E> {
-        let mut d = self.direction(g);
-        let mut slope = dot(g, &d);
-        if slope >= 0.0 {
-            // the stored pairs no longer give a descent direction: restart
-            self.s.clear();
-            self.y.clear();
-            d = self.direction(g);
-            slope = dot(g, &d);
-        }
+        // Every stored pair has `s·y > 0`, so the implied inverse Hessian is
+        // positive definite and `d` is a descent direction: no restart is needed.
+        let d = self.direction(g);
+        let slope = dot(g, &d);
         let mut step = 1.0;
         for trial in 1..=Self::MAX_TRIALS {
             let candidate: Vec<f64> = x.iter().zip(&d).map(|(x, d)| x + step * d).collect();

@@ -174,6 +174,29 @@ fn lbfgs_is_exact_on_a_quadratic_after_one_pair() {
 }
 
 #[test]
+fn lbfgs_reports_a_failed_line_search_and_keeps_the_iterate() {
+    // A loss that never decreases along the reported descent direction: every
+    // trial fails the Armijo condition.
+    let stubborn = |_: &[f64]| -> Result<(f64, Vec<f64>), ()> { Ok((2.0, vec![1.0, 0.0])) };
+    let mut x = vec![0.5, -0.5];
+    let (mut f, mut g) = (1.0, vec![1.0, 0.0]);
+    let mut optimizer = Lbfgs::new(3);
+    let outcome = optimizer.step(&mut x, &mut f, &mut g, stubborn).unwrap();
+    assert_eq!(outcome, LbfgsStep::LineSearchFailed { evaluations: 30 });
+    assert_eq!((x, f, g), (vec![0.5, -0.5], 1.0, vec![1.0, 0.0]));
+}
+
+#[test]
+fn lbfgs_propagates_an_evaluation_error() {
+    let failing = |_: &[f64]| -> Result<(f64, Vec<f64>), &'static str> { Err("engine") };
+    let mut x = vec![1.0];
+    let (mut f, mut g) = (1.0, vec![1.0]);
+    let result = Lbfgs::new(1).step(&mut x, &mut f, &mut g, failing);
+    assert_eq!(result, Err("engine"));
+    assert_eq!(x, vec![1.0]);
+}
+
+#[test]
 fn flatten_and_unflatten_round_trip_in_parameter_order() {
     let mut params = [tensor(vec![2], vec![1.0, 2.0]), tensor(vec![1], vec![3.0])];
     assert_eq!(flatten(&params), vec![1.0, 2.0, 3.0]);

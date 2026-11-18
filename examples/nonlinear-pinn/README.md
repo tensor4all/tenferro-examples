@@ -70,7 +70,10 @@ and run for every Adam step and every line-search trial.
 `src/reference.rs` solves both PDEs pseudo-spectrally on a periodic grid with
 `tenferro-fft` (`rfft`/`irfft` through one `FftExecutor`, so plans are reused):
 the diffusion is integrated exactly and the nonlinearity with the Lawson
-integrating-factor RK4 scheme, dealiased by the 2/3 rule. Burgers is periodic
+integrating-factor RK4 scheme, with the top third of the modes zeroed (the 2/3
+rule). That dealiases Burgers' quadratic term exactly but Allen-Cahn's cubic
+term only partly; a solve with the exact 1/2 rule differs from it by at most
+$4 \times 10^{-11}$. Burgers is periodic
 through the odd symmetry of its initial data. Burgers uses 4096 points and
 Allen-Cahn 2048, both with $\Delta t = 10^{-4}$; the solve takes about a second.
 
