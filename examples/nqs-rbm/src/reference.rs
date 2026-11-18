@@ -183,7 +183,7 @@ pub(crate) fn exact_check(model: &Model) -> Result<ExactCheck, Box<dyn Error>> {
     let energy = dot(&psi, &h_psi) / norm;
     let variance = dot(&h_psi, &h_psi) / norm - energy * energy;
 
-    let (values, vectors) =
+    let Eigh { values, vectors } =
         TypedTensor::from_vec_col_major(vec![d, d], h)?.eigh(&mut CpuEngine::serial())?;
     let values = values.as_slice()?;
     let vectors = vectors.as_slice()?;

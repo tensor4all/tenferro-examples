@@ -14,7 +14,7 @@
 use std::error::Error;
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::prelude::*;
-use tenferro_runtime::TypedTensorSessionOpsExt;
+use tenferro_runtime::CoreOps;
 
 #[cfg(test)]
 mod tests;
