@@ -111,7 +111,12 @@ until no $G(\mathrm{i}\omega_n)$ changes by more than $10^{-9}$, with $M = 2048$
 The window widens towards the $T = 0$ IPT values as the temperature drops.
 At $T = D/40$ its upper end agrees with $U_{c2} \in [2.85, 2.9]\,D$ of the
 [sparse-ir IPT tutorial](https://spm-lab.github.io/sparse-ir-tutorial/src/DMFT_IPT_py.html)
+and of its Rust port in [sparse-ir-rs](https://spm-lab.github.io/sparse-ir-rs/tutorials/dmft_ipt.html),
 for the same model and temperature.
+The Rust port reports $Z \approx 0.263$ at $U = 2.5\,D$;
+it takes $\partial \operatorname{Im}\Sigma / \partial \omega$ as the difference quotient
+between the two lowest positive frequencies instead of $\operatorname{Im}\Sigma(\mathrm{i}\omega_0)/\omega_0$,
+and that rule applied to this example's $\Sigma$ gives $0.26307$, against $0.185$ from the rule above.
 IPT is second-order perturbation theory in $U$,
 which at half filling also reproduces the atomic limit;
 in between it is an approximation,
