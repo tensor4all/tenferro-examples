@@ -68,7 +68,8 @@ and run for every Adam step and every line-search trial.
 ## Reference solution
 
 `src/reference.rs` solves both PDEs pseudo-spectrally on a periodic grid with
-`tenferro-fft` (`rfft`/`irfft` through one `FftExecutor`, so plans are reused):
+`tenferro-fft` (`rfft_with`/`irfft_with` through one `FftExecutor`, so plans
+are reused):
 the diffusion is integrated exactly and the nonlinearity with the Lawson
 integrating-factor RK4 scheme, with the top third of the modes zeroed (the 2/3
 rule). That dealiases Burgers' quadratic term exactly but Allen-Cahn's cubic
@@ -166,7 +167,7 @@ XLA_FLAGS="--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1" \
 
 ## tenferro notes
 
-The example uses only public 0.11.0 APIs.
+The example uses only public 0.12.0 APIs.
 
 - **`jvp` tangents carry data.** The ones tangent of the derivative `jvp`s is a
   full-shape constant leaf, as in `kdv-pinn`; a rank-0 constant expanded with

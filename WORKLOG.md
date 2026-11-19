@@ -146,3 +146,82 @@ The review additionally confirmed the triangular-solve mapping
 `(true, true, true, false)`), that `EagerTensor::grad()` still reads the slot
 `session.backward` writes, and that no removed API call remains in the tree.
 Recorded in the PR body as `review: gpt-6.1-sol APPROVE`.
+
+---
+
+# Phase 2: rebase onto main + nonlinear-pinn port
+
+Trigger: scheduled `Upstream main` run `44366785210` (head `88bb29d`,
+2026-11-18T18:10:30Z) fails in `checks.yml`; `main` added
+`examples/nonlinear-pinn` (`be1e72d`, unported: 0.11 `FftExecutor::rfft/irfft`)
+and docs (`88bb29d`); branch is CONFLICTING `behind_by: 2`. Publication blocker
+gone: tenferro **0.12.0** is on crates.io for all six crates (registry API
+`max_stable_version` = 0.12.0 each, checked 2026-11-19), so the release lane
+can resolve `--locked` from the registry.
+
+## P2.1 Plan + plan review (before code)
+
+- Plan: `IMPLEMENTATION-PLAN.md` rewritten for phase 2 (supersedes the phase-1
+  text, same file per repo convention).
+- Reviewer: `reviewer-glm` = `ollama-cloud/glm-5.3-flash`, read-only subagent,
+  own pi session.
+- Verdict: **APPROVE**, 0 BLOCKER / 0 IMPORTANT / 3 MINOR, before any code:
+  - M1 (accepted): `cargo update -p` only the five *existing* tenferro lock
+    entries; `-p tenferro-fft` would match nothing in the 0.11 lock.
+  - M2 (resolved): the 0.12.0 release SHA `35bc49d5` verified directly in the
+    tenferro-rs checkout (`git log --grep="release: 0.12.0"`), not from a tag
+    guess.
+  - M3 (accepted): the two `nonlinear_pinn` short-run lines and the README
+    table come verbatim from `origin/main`@`88bb29d`, which is where §1.1/§2
+    of the plan quoted them from.
+  - The reviewer could not read unreferenced git objects with its read-only
+    toolset; the §2 build bars falsify those claims at the first cargo step.
+
+## P2.2 Change
+
+- Rebased `d339a30` onto `origin/main`@`88bb29d` → `4385395`; conflicts
+  resolved exactly as planned (`Cargo.toml`: five 0.12.0 pins +
+  `tenferro-fft = "0.12.0"`; `README.md`: main's attribution table with the
+  port's deeponet cell). No other conflict.
+- `examples/nonlinear-pinn/src/reference.rs`: `rfft`/`irfft` positional calls →
+  `rfft_with`/`irfft_with` with `FftOptions::default().axis(0)` (and
+  `.n(Some(self.n))` for `irfft`); imports `FftExecutor, FftOptions`
+  (`FftNorm` dropped: `Backward` is the documented `FftOptions` default).
+- Root `README.md` nonlinear-pinn row and
+  `examples/nonlinear-pinn/README.md:71,170`: `rfft_with`/`irfft_with`
+  spelling, "public 0.12.0 APIs". Left untouched (accurate history):
+  "rejected as a tangent in 0.11", the `main.rs:180` 0.11 jvp comment,
+  `sciml-kit/src/lib.rs:18`.
+- `Cargo.lock`: the six `tenferro-*` entries (+ their internal `tenferro-*`
+  deps) moved to registry 0.12.0 via `cargo update -p` on exactly those; no
+  git source, no wholesale update.
+
+## P2.3 Verification, release lane (`ci.yml`, registry pins, `--locked`)
+
+All from the worktree root, CI order; artifacts in `outputs/`, raw logs in
+`/tmp/te4-phase2-data/short-runs.log`:
+
+| check | result |
+| --- | --- |
+| `cargo fmt --all --check` | pass |
+| `cargo clippy --locked --workspace --all-targets --release -- -D warnings` | pass, no warnings, no `#[allow]` added |
+| `cargo test --locked --workspace --release` | **124 passed**, 0 failed (phase-1: 111; +13 new nonlinear-pinn/Lbfgs tests) |
+| the eleven "Short runs" of `checks.yml`, verbatim, with `--locked` | all exit 0 |
+
+Numeric regression: the nine phase-1 runs report **every scalar identical** to
+the phase-1 0.12 records (kdv 5.625707e-1; neural-ode 6.069677e-2; deeponet
+1.146277e-2; pinn-gauss-newton 7.416709e0/9.204844e-1/3 rejections,
+4.714285e1/4.076132e0/2 rejections, adam exit 0; nqs ising
+-1.2814577239/-1.2812628356/fidelity 0.999421388; heisenberg-chain
+-1.8255467045/-1.8254521369/0.999951147; heisenberg-square exit 0).
+
+`nonlinear_pinn` (first green 0.12 run; its unit tests check the reference
+against exact Cole-Hopf, all passing):
+
+| run | result |
+| --- | --- |
+| burgers `--adam-steps 20 --lbfgs-steps 10` | adam 4.0725e-1 → 3.3553e-1, l-bfgs → final loss 1.9452e-1, relative L2 5.6796e-1, PNG saved |
+| allen-cahn `--optimizer adam --adam-steps 20` | 2.8347e1 → final loss 4.6337e0, relative L2 7.3412e-1, PNG saved |
+
+(One rerun: the kdv gif first went to a wrong filename in my invocation;
+repeated verbatim from `checks.yml` — same scalars, both exit 0.)
