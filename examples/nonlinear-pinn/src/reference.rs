@@ -22,7 +22,7 @@
 
 use crate::problem::Problem;
 use tenferro_cpu::CpuEngine;
-use tenferro_fft::{FftExecutor, FftNorm};
+use tenferro_fft::{FftExecutor, FftOptions};
 use tenferro_tensor::{Complex64, Tensor};
 
 /// The reference on `n` grid points `x_j = -1 + 2 j / n`, at the times
@@ -70,7 +70,7 @@ impl Solver {
         let u = Tensor::from_vec_col_major(vec![self.n], u).expect("grid vector");
         let spectrum = self
             .fft
-            .rfft(&u, None, 0, FftNorm::Backward, &mut self.engine)
+            .rfft_with(&u, &FftOptions::default().axis(0), &mut self.engine)
             .expect("rfft of the grid values");
         spectrum
             .as_slice::<Complex64>()
@@ -83,11 +83,9 @@ impl Solver {
             .expect("spectrum vector");
         let u = self
             .fft
-            .irfft(
+            .irfft_with(
                 &spectrum,
-                Some(self.n),
-                0,
-                FftNorm::Backward,
+                &FftOptions::default().axis(0).n(Some(self.n)),
                 &mut self.engine,
             )
             .expect("irfft of the spectrum");

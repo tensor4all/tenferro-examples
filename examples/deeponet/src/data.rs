@@ -3,7 +3,7 @@
 //! A Gaussian random field with the RBF covariance
 //! `exp(-(s-t)^2 / (2 * 0.2^2))` is sampled on a fine grid. The factorization is
 //! a **Cholesky factorization of the covariance matrix**, computed on the host
-//! with `TensorLinalgExt::cholesky` from tenferro-linalg 0.11.0; it is not a
+//! with `LinalgOps::cholesky` from tenferro-linalg 0.12; it is not a
 //! graph operation because the data is generated once before training. A
 //! diagonal jitter (`1e-10`) keeps the 397-point covariance positive definite.
 //!
@@ -13,7 +13,7 @@
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::TensorLinalgExt;
+use tenferro_linalg::LinalgOps;
 use tenferro_tensor::{Result, Tensor};
 
 /// Fixed sensor points of the branch network.
