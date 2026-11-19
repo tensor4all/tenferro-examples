@@ -246,4 +246,22 @@ git; the tree is clean and the committed state carries registry pins only.
 
 ## P2.5 Finished-diff review
 
-(pending)
+`reviewer-glm` = `ollama-cloud/glm-5.3-flash`, read-only subagent, own pi
+session, reviewed the finished branch state. Verdict: **APPROVE**,
+0 BLOCKER / 0 IMPORTANT / 1 MINOR.
+
+- It verified the port against the *published* `tenferro-fft-0.12.0` source
+  in the cargo registry cache (`rfft_with`/`irfft_with` signatures,
+  `FftOptions` defaults `n=None, axis=-1, norm=Backward`), the plan-reuse
+  across steps, the six registry pins, the git-source-free lock, and the doc
+  lines; and found no leftover 0.11 call site in the tree.
+- M (no defect): the suggested reference checkout
+  `~/projects/tensor4all/tenferro-rs` is a stale detached snapshot, so it
+  verified against the registry cache instead.
+- It could not run git/cargo; I confirmed by git what it inferred:
+  `.github/` has **no** diff vs `origin/main`, no file is deleted, no
+  `#[ignore]` exists, and the only `#[allow]`s (`kdv-pinn/src/loss.rs:35`,
+  `neural-ode/src/train.rs:78`) are pre-existing outside the phase-2 file set
+  (phase-1-approved code).
+
+Recorded in the PR body as `review: glm-5.3-flash APPROVE`.
