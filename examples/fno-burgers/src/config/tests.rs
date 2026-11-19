@@ -2,6 +2,13 @@ use super::*;
 
 fn parse(args: &[&str]) -> Result<Config, Box<dyn Error>> {
     Config::parse(args.iter().map(|s| (*s).to_owned()))
+        .map(|config| config.expect("these arguments do not request help"))
+}
+
+#[test]
+fn help_token_is_a_valid_plot_path() {
+    let config = parse(&["--plot", "--help"]).unwrap();
+    assert_eq!(config.plot.as_deref(), Some("--help"));
 }
 
 #[test]

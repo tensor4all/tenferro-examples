@@ -12,7 +12,9 @@ pub(crate) struct Config {
 }
 
 impl Config {
-    pub(crate) fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, Box<dyn Error>> {
+    pub(crate) fn parse(
+        args: impl IntoIterator<Item = String>,
+    ) -> Result<Option<Self>, Box<dyn Error>> {
         let mut config = Self {
             epochs: 1000,
             seed: 42,
@@ -24,6 +26,9 @@ impl Config {
         };
         let mut args = args.into_iter();
         while let Some(flag) = args.next() {
+            if flag == "--help" {
+                return Ok(None);
+            }
             let value = args
                 .next()
                 .ok_or_else(|| format!("missing value for {flag}"))?;
@@ -49,7 +54,7 @@ impl Config {
         {
             return Err("epochs, width, sample counts and batch must be positive".into());
         }
-        Ok(config)
+        Ok(Some(config))
     }
 }
 

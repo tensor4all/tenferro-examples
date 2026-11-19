@@ -40,9 +40,24 @@ fn relative_l2(prediction: &[f64], reference: &[f64]) -> Result<f64, Box<dyn Err
     Ok(relative)
 }
 
+fn parameter_gradients(
+    gradients: Vec<Option<TracedTensor>>,
+) -> tenferro_tensor::Result<Vec<TracedTensor>> {
+    gradients
+        .into_iter()
+        .enumerate()
+        .map(|(index, gradient)| {
+            gradient.ok_or_else(|| {
+                tenferro_tensor::Error::Internal(format!(
+                    "FNO model parameter {index} does not reach the loss"
+                ))
+            })
+        })
+        .collect()
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.iter().any(|arg| arg == "--help") {
+    let Some(config) = config::Config::parse(std::env::args().skip(1))? else {
         println!(
             "fno_burgers [--epochs 1000] [--seed 42] [--width 16] \
             [--train-samples 256] [--test-samples 64] [--batch 16] [--plot PATH]\n\
@@ -50,8 +65,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             Each epoch is one independently sampled minibatch Adam step."
         );
         return Ok(());
-    }
-    let config = config::Config::parse(args)?;
+    };
     let startup = Instant::now();
     println!(
         "seed {} (train {}, test {}, initialization {}, minibatches {})",
@@ -97,11 +111,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .with_semantic_extension_rules(tenferro_fft::semantic_ad_rules()?)?
         .build()?;
     let seed = trace.from_vec_col_major(vec![], vec![1.0_f64])?;
-    let gradients: Vec<TracedTensor> = ad
-        .vjp_many(&loss, &net.placeholders(), &seed)?
-        .into_iter()
-        .map(|g| g.expect("all model parameters reach the loss"))
-        .collect();
+    let gradients = parameter_gradients(ad.vjp_many(&loss, &net.placeholders(), &seed)?)?;
     let mut outputs = vec![&loss];
     outputs.extend(gradients.iter());
     let compiled = Instant::now();

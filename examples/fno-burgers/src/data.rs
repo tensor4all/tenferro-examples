@@ -117,6 +117,7 @@ impl Dataset {
 
     pub(crate) fn rms(&self) -> (f64, f64) {
         let rms = |values: &[f64]| {
+            assert!(!values.is_empty(), "dataset RMS requires nonempty samples");
             (values.iter().map(|v| v * v).sum::<f64>() / values.len() as f64).sqrt()
         };
         (rms(&self.initial), rms(&self.final_values))

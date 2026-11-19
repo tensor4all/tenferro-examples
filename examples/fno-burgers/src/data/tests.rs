@@ -60,7 +60,8 @@ fn reference_timestep_converges_to_cole_hopf() {
     eprintln!("Cole-Hopf dt=0.004/0.002/0.001 max errors: {errors:?}");
     assert!(errors[1] < 0.4 * errors[0], "errors: {errors:?}");
     assert!(errors[2] < 0.4 * errors[1], "errors: {errors:?}");
-    assert!(errors[1] < 2e-6, "default dt error: {:e}", errors[1]);
+    // Allow roundoff headroom over the documented 2.14e-10 reference residual.
+    assert!(errors[1] < 1e-9, "default dt error: {:e}", errors[1]);
 }
 
 #[test]
@@ -81,7 +82,7 @@ fn gaussian_reference_converges_when_the_timestep_is_halved() {
     let relative_error = (difference / norm).sqrt();
     eprintln!("Gaussian N=1024 dt=0.002 vs 0.001 relative L2 residual: {relative_error:e}");
     assert!(
-        relative_error < 1e-3,
+        relative_error < 1e-7,
         "Gaussian timestep residual: {relative_error:e}"
     );
 }
@@ -152,6 +153,17 @@ fn rms_uses_actual_dataset_values() {
         final_values: vec![0.25; REFERENCE_N],
     };
     assert_eq!(dataset.rms(), (3.0, 0.25));
+}
+
+#[test]
+fn rms_rejects_empty_input_or_target_storage() {
+    for (initial, final_values) in [(vec![], vec![1.0]), (vec![1.0], vec![])] {
+        let dataset = Dataset {
+            initial,
+            final_values,
+        };
+        assert!(std::panic::catch_unwind(|| dataset.rms()).is_err());
+    }
 }
 
 #[test]
