@@ -225,3 +225,25 @@ against exact Cole-Hopf, all passing):
 
 (One rerun: the kdv gif first went to a wrong filename in my invocation;
 repeated verbatim from `checks.yml` — same scalars, both exit 0.)
+
+## P2.4 Verification, upstream-main lane (`upstream-main.yml`, git deps, no `--locked`)
+
+The workflow's sed applied verbatim (six `tenferro-*` keys → git
+`tensor4all/tenferro-rs` branch `main`, incl. the new `tenferro-fft`), raw
+logs `/tmp/te4-phase2-upstream/short-runs.log`:
+
+| check | result |
+| --- | --- |
+| `cargo fmt --all --check` | pass |
+| `cargo clippy --workspace --all-targets --release -- -D warnings` | pass, no warnings, no `#[allow]` added |
+| `cargo test --workspace --release` | **124 passed**, 0 failed |
+| the eleven "Short runs", verbatim, without `--locked` | all exit 0 |
+
+Every reported scalar is **identical** to the release-lane run (tenferro-rs
+`main` is 14 commits past the released 0.12.0; none of them changes these
+examples' numerics). After the lane, `Cargo.toml`/`Cargo.lock` restored from
+git; the tree is clean and the committed state carries registry pins only.
+
+## P2.5 Finished-diff review
+
+(pending)
