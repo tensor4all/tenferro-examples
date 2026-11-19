@@ -27,11 +27,18 @@ is a smoke run. The CPU reference and spectral gradient checks are quantitative;
 no GPU or paper-scale accuracy is claimed. Concrete reference FFTs allocate
 outputs even though the executor reuses plans; the owned stage buffer is reused.
 
-Local release verification passed: formatting, workspace Clippy with warnings denied,
-141 workspace tests, and all 12 workflow short runs. The default experiment
-measured held-out relative L2 errors of 2.0534%, 2.0543%, and 2.0544% at
-128/256/512. The 17 focused tests include real/imaginary spectral gradients
-and a seed-42 reference timestep residual of 1.73e-8. Hosted exact-head CI and
-upstream-main verification remain publication-time checks; GPU was not run.
-Independent review is recorded in this chat's handoff, separate from the
-scientific reproducibility instructions.
+The [released-dependency CI run](https://github.com/tensor4all/tenferro-examples/actions/runs/44440237228)
+passed for the original head `0d3a28d`: formatting, workspace Clippy, all 141
+workspace tests and all 12 short runs. GPU and upstream-main execution were not
+verified locally.
+
+The review follow-up makes help parsing respect option-value positions, returns
+an indexed typed internal error for disconnected model parameters, and asserts
+nonempty RMS storage. The numerical guards now allow modest headroom over the
+recorded residuals instead of orders of magnitude. All 146 workspace tests pass,
+including 22 FNO tests with the new failure-path and CLI regressions; formatting and focused
+Clippy pass. A fresh default run on source commit `55dde3b` reproduces all four
+printed learning errors and retains its settings, timings and numerical checks
+in the [committed run log](../../examples/fno-burgers/results/default-run.txt).
+Hosted CI validates each revision; the different-provider review of the original
+head does not cover later pushes.

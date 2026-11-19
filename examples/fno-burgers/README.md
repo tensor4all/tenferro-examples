@@ -41,7 +41,11 @@ that step's update, so it is a different statistic.
 ### Measured results
 
 Measured on 2026-11-19 with the defaults above, macOS 27.0.1, Apple M3 Pro,
-Rust 1.98.1, released tenferro 0.12.0 and `CpuEngine::serial()`:
+Rust 1.96.0, released tenferro 0.12.0 and `CpuEngine::serial()`:
+
+The committed [run log](results/default-run.txt) records executable source commit
+`55dde3b`, the lockfile hash, host/toolchain settings, complete training output,
+and the reference-check residuals below.
 
 | Dataset | Grid | Functions | Final relative L2 |
 | --- | ---: | ---: | ---: |
@@ -52,8 +56,8 @@ Rust 1.98.1, released tenferro 0.12.0 and `CpuEngine::serial()`:
 
 Input/target training RMS were `0.569998258` / `0.00925960546`.
 The 1000-step run's final pre-update minibatch MSE was `9.63911693e-5`.
-One measured run took 4.13 seconds for data generation and 7.52 seconds for
-training (11.76 seconds total, excluding the Cargo build). These are one-run
+The recorded run took 4.179 seconds for data generation and 7.594 seconds for
+training (11.881 seconds total, excluding the Cargo build). These are one-run
 wall times, not a performance benchmark. The accuracy is from this seeded
 small-data experiment, rather than the paper's training protocol.
 
@@ -108,7 +112,9 @@ conservation and reject high-frequency aliasing. For the smooth test at
 `3.30e-9 / 2.14e-10 / 1.36e-11`. On one seed-42 Gaussian field at 1024 points,
 halving the default timestep changes the `t=1` target by `1.73e-8` in relative
 L2. These are numerical reference checks, not a learning-accuracy estimate or
-an ensemble-wide error bound.
+an ensemble-wide error bound. Regression limits are `1e-9` for the `t=0.2`
+Cole–Hopf check at the default timestep and `1e-7` for the Gaussian residual, leaving modest
+roundoff headroom over the recorded values.
 
 ## Model, FFTs and complex AD
 
