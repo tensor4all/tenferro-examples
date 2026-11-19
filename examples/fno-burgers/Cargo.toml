@@ -1,0 +1,21 @@
+[package]
+name = "fno_burgers"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Fourier neural operator for periodic viscous Burgers with complex spectral parameters"
+
+[dependencies]
+sciml-kit.workspace = true
+tenferro-ad.workspace = true
+tenferro-cpu.workspace = true
+tenferro-fft = { workspace = true, features = ["autodiff"] }
+tenferro-runtime.workspace = true
+tenferro-tensor.workspace = true
+rand = "0.8"
+plotters = { version = "0.3", default-features = false, features = [
+    "bitmap_backend",
+    "bitmap_encoder",
+    "line_series",
+] }
