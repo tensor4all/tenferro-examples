@@ -93,7 +93,8 @@ and compares the converged $G$ with the semicircular Green's function;
 the difference is the stopping tolerance of the loop.
 The transforms themselves are checked against closed forms in the tests:
 $\mathrm{i}\omega_n \to \tau$ to $2 \times 10^{-3}$ (the first neglected tail term)
-and $\tau \to \mathrm{i}\omega_n$ to $10^{-6}$.
+and $\tau \to \mathrm{i}\omega_n$ to $10^{-6}$ over the first 50 Matsubara frequencies
+(the error grows with $\omega_n$, to $5 \times 10^{-4}$ at the last of 512).
 
 The coexistence window is where the two sweeps reach different solutions
 (their $Z$ differ by more than $10^{-3}$), on a grid of step $0.05\,D$.

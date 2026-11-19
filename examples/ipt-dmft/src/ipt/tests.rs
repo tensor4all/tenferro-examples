@@ -48,12 +48,13 @@ fn tau_to_iw_transforms_a_particle_hole_symmetric_pair() {
         .collect();
     let f_tau = Tensor::from_vec_col_major([n], f_tau).unwrap();
     let f_iw = values(&grid.tau_to_iw(&f_tau, &mut engine).unwrap());
+    // The error grows with ω_n: 3.8e-7 at n = 49, 5.5e-4 at n = 511.
     for (k, value) in f_iw.iter().take(50).enumerate() {
         let w = matsubara(beta, k);
         let exact = -w / (w * w + epsilon * epsilon);
         assert_eq!(value.re, 0.0);
         assert!(
-            (value.im - exact).abs() < 1e-4,
+            (value.im - exact).abs() < 1e-6,
             "n = {k}: {} vs {exact}",
             value.im
         );
