@@ -1,0 +1,57 @@
+FNO Burgers default-run evidence
+Source commit: 55dde3bcfcb3c7fc40d5b11bc37e8acc3b5ce8d0
+Recorded: 2026-11-19T19:23:57+09:00
+Cargo.lock SHA256: ef84e7f739b2308b86a0417650bd986b3b372f112fa18bfbd89899aa4cc9fb8a
+Host: Apple M3 Pro; macOS 27.0.1; arm64
+rustc 1.96.0 (ac68faa20 2026-05-25)
+cargo 1.96.0 (30a34c682 2026-05-25)
+Profile: release, released dependencies, locked resolution
+Execution: CpuEngine::serial() for reference generation and training
+One full default run; no affinity or host-noise control. Timings are illustrative, not a benchmark.
+Command (repository root): cargo run --locked --release -p fno_burgers -- --plot examples/fno-burgers/results/prediction.png
+
+Program stdout:
+seed 42 (train 42, test 43, initialization 44, minibatches 45)
+reference grid 1024, train grid 128, modes 16, width 16, four layers, train 256, test 64, batch 16, Adam steps 1000
+data generation: 4.179 s; train RMS input=5.69998258e-1, target=9.25960546e-3
+training compile/prepare: 0.004 s; 14 real and 4 complex parameter tensors
+step 1: normalized minibatch MSE=9.80662809e-1
+step 100: normalized minibatch MSE=1.56480428e-3
+step 200: normalized minibatch MSE=7.41586915e-4
+step 300: normalized minibatch MSE=5.01233691e-4
+step 400: normalized minibatch MSE=2.38845057e-4
+step 500: normalized minibatch MSE=1.73192395e-4
+step 600: normalized minibatch MSE=1.46752996e-4
+step 700: normalized minibatch MSE=1.59795462e-4
+step 800: normalized minibatch MSE=1.34412355e-4
+step 900: normalized minibatch MSE=8.58494610e-5
+step 1000: normalized minibatch MSE=9.63911693e-5
+training: 7.594 s
+train n=128, samples=256: relative L2=1.03677761e-2; forward 0.036 s
+test n=128, samples=64: relative L2=2.05344239e-2; forward 0.008 s
+test n=256, samples=64: relative L2=2.05434839e-2; forward 0.016 s
+test n=512, samples=64: relative L2=2.05442724e-2; forward 0.033 s
+saved held-out prediction/reference figure to examples/fno-burgers/results/prediction.png
+total elapsed: 11.881 s
+
+Default run exit status: 0
+
+Reference checks on the same source and host:
+cargo test --locked --release -p fno_burgers converges -- --nocapture --test-threads=1
+
+running 2 tests
+test data::tests::gaussian_reference_converges_when_the_timestep_is_halved ... ok
+test data::tests::reference_timestep_converges_to_cole_hopf ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.05s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+
+Printed numerical residuals (Cargo build messages omitted):
+Gaussian N=1024 dt=0.002 vs 0.001 relative L2 residual: 1.729898104114184e-8
+Cole-Hopf dt=0.004/0.002/0.001 max errors: [3.2971539942749928e-9, 2.1391244331425696e-10, 1.3634704476572779e-11]
+Reference checks exit status: 0

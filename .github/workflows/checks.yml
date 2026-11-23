@@ -57,6 +57,9 @@ jobs:
             --plot outputs/neural-ode.png
           cargo run $LOCKED --release -p deeponet -- --epochs 100 \
             --plot outputs/deeponet.png
+          cargo run $LOCKED --release -p fno_burgers -- --epochs 5 --width 4 \
+            --train-samples 8 --test-samples 4 --batch 4 \
+            --plot outputs/fno-burgers.png
           cargo run $LOCKED --release -p pinn_gauss_newton -- --dim 1 --optimizer lm \
             --epochs 5 --plot outputs/pinn-gauss-newton.png
           cargo run $LOCKED --release -p pinn_gauss_newton -- --dim 2 --optimizer lm \

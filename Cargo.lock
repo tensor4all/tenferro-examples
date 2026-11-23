@@ -340,6 +340,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "fno_burgers"
+version = "0.1.0"
+dependencies = [
+ "plotters",
+ "rand",
+ "sciml-kit",
+ "tenferro-ad",
+ "tenferro-cpu",
+ "tenferro-fft",
+ "tenferro-runtime",
+ "tenferro-tensor",
+]
+
+[[package]]
 name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1523,6 +1537,7 @@ dependencies = [
  "num-traits",
  "realfft",
  "rustfft",
+ "tenferro-ad",
  "tenferro-cpu",
  "tenferro-internal-extension-macros",
  "tenferro-internal-ops",
